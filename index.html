@@ -69,6 +69,7 @@
   #log .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--c); }
   #log .span { color: var(--muted); font-size: 14px; }
   #log .dur { font-weight: 600; }
+  .btn.more { width: 100%; margin-top: 14px; font-weight: 500; color: var(--muted); }
 
   dialog {
     border: 0; border-radius: 16px; background: var(--card); color: var(--text);
@@ -197,6 +198,7 @@
 <h2>Einträge</h2>
 <p id="empty">Noch nichts erfasst. Tippe auf eine Kategorie zum Starten.</p>
 <ul id="log"></ul>
+<button class="btn more" id="more" hidden></button>
 </section>
 
 <section id="viewTimeline" hidden>
@@ -486,12 +488,23 @@ function buildTiles() {
   }
 }
 
+// Only the last two weeks are listed (rebuilding years of rows on every tap gets slow);
+// "Mehr laden" adds two more weeks each time
+const LOG_STEP_DAYS = 14;
+let logDays = LOG_STEP_DAYS;
+
 // Rebuilt only when state changes, so long presses on rows aren't interrupted
 function renderLog() {
-  const rows = state.entries.map((e, i) => ({ e, idx: i, key: isAdj(e) ? e.at : e.start }));
-  if (state.active) rows.push({ e: state.active, idx: 'active', key: state.active.start });
-  rows.sort((a, b) => b.key - a.key);
+  const from = new Date(); from.setHours(0, 0, 0, 0); from.setDate(from.getDate() - (logDays - 1));
+  const all = state.entries.map((e, i) => ({ e, idx: i, key: isAdj(e) ? e.at : e.start }));
+  if (state.active) all.push({ e: state.active, idx: 'active', key: state.active.start });
+  const rows = all.filter(r => r.key >= from.getTime()).sort((a, b) => b.key - a.key);
+  const older = all.length - rows.length;
   $('empty').hidden = rows.length > 0;
+  $('empty').textContent = older ? `Keine Einträge in den letzten ${logDays} Tagen.`
+                                 : 'Noch nichts erfasst. Tippe auf eine Kategorie zum Starten.';
+  $('more').hidden = !older;
+  $('more').textContent = `Mehr laden (${older === 1 ? '1 älterer Eintrag' : `${older} ältere Einträge`})`;
   let html = '', day = null;
   for (const { e, idx, key } of rows) {
     if (fmtDate(key) !== day) { day = fmtDate(key); html += `<li class="day">${dayLabel(key)}</li>`; }
@@ -1169,6 +1182,7 @@ for (const el of [tlEl, $('tlAdj')]) {
   el.addEventListener('click', ev => { const b = ev.target.closest('[data-idx]'); if (b) openEntryDlg(b.dataset.idx); });
 }
 
+$('more').addEventListener('click', () => { logDays += LOG_STEP_DAYS; renderLog(); });
 $('stop').addEventListener('click', () => switchTo(null));
 $('csv').addEventListener('click', downloadCsv);
 
