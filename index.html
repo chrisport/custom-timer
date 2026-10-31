@@ -796,7 +796,8 @@ $('catsDone').addEventListener('click', () => {
 const GOOGLE_CLIENT_ID = '1019469281637-cvr48b89o8j5umaeoai43fdbps938nm6.apps.googleusercontent.com'; // OAuth client ID (type "Web") from the Google Cloud Console
 const SCOPE = 'https://www.googleapis.com/auth/drive.file'; // only files this app created
 const SHEET_TITLE = 'Arbeitszeit (custom-timer)', TAB = 'Einträge', SETTINGS_TAB = 'Einstellungen', DATA_TAB = '_app-daten';
-const TABS = [TAB, SETTINGS_TAB, DATA_TAB];
+const TOTALS_TAB = 'Summen', DAILY_TAB = 'Pro Tag';
+const TABS = [TAB, DAILY_TAB, TOTALS_TAB, SETTINGS_TAB, DATA_TAB];
 const SHEETS = 'https://sheets.googleapis.com/v4/spreadsheets';
 const SYNC_KEY = 'worktimer.sync';
 
@@ -894,6 +895,55 @@ async function readRemote() {
 }
 
 // "Einstellungen" tab: one readable row per category (also editable by hand, see readSettings)
+// ---- statistics tabs ----
+// Time per day and category (ms), oldest day first. Entries crossing midnight are split,
+// corrections count on their day, the running entry counts until now.
+function dailyTotals() {
+  const days = new Map();
+  const add = (ts, cat, ms) => {
+    const key = fmtDate(ts);
+    if (!days.has(key)) days.set(key, { day0: startOfDay(ts), t: {} });
+    const t = days.get(key).t;
+    t[cat] = (t[cat] ?? 0) + ms;
+  };
+  const running = state.active ? [{ ...state.active, end: Date.now() }] : [];
+  for (const e of [...state.entries, ...running]) {
+    if (isAdj(e)) { add(e.at, e.cat, e.adj); continue; }
+    for (let from = e.start; from < e.end;) {
+      const to = Math.min(e.end, nextDay(startOfDay(from)));
+      add(from, e.cat, to - from);
+      from = to;
+    }
+  }
+  return [...days.values()].sort((a, b) => a.day0 - b.day0);
+}
+const hours = ms => Math.round(ms / 36e3) / 100; // decimal hours, 2 places
+const fmtHM = ms => (ms < 0 ? '-' : '') + fmtDur(Math.abs(ms), false);
+
+// Returns the rows for the "Summen" and "Pro Tag" tabs
+function statsRows() {
+  const days = dailyTotals(), total = {};
+  for (const { t } of days) for (const [cat, ms] of Object.entries(t)) total[cat] = (total[cat] ?? 0) + ms;
+  const cats = state.cats.filter(c => !c.hidden || total[c.id]);
+  const kindName = c => c.kind === 'break' ? 'Pause' : 'Arbeit';
+  const work = sumKind(total, 'work'), brk = sumKind(total, 'break');
+  const totals = [
+    ['Kategorie', 'Art', 'Stunden', 'Dauer (h:mm)'],
+    ...cats.map(c => [c.name, kindName(c), hours(total[c.id] ?? 0), fmtHM(total[c.id] ?? 0)]),
+    [],
+    ['Summe Arbeit', 'Arbeit', hours(work), fmtHM(work)],
+    ['Summe Pause', 'Pause', hours(brk), fmtHM(brk)],
+  ];
+  const daily = [
+    ['Datum', 'Tag', ...cats.map(c => c.name), 'Summe Arbeit', 'Summe Pause'],
+    ...days.map(({ day0, t }) => [
+      fmtDate(day0), new Date(day0).toLocaleDateString('de-DE', { weekday: 'short' }),
+      ...cats.map(c => hours(t[c.id] ?? 0)), hours(sumKind(t, 'work')), hours(sumKind(t, 'break')),
+    ]),
+  ];
+  return { totals, daily };
+}
+
 const SETTINGS_HEAD = ['ID', 'Name', 'Farbe', 'Art', 'Gelöscht'];
 const settingsRows = () => [SETTINGS_HEAD, ...state.cats.map(c =>
   [c.id, c.name, c.color, c.kind === 'break' ? 'Pause' : 'Arbeit', c.hidden ? 'ja' : ''])];
@@ -925,6 +975,9 @@ async function writeRemote() {
   const append = (tab, values) => api(`${SHEETS}/${id}/values/${range(tab, '!A1')}:append?valueInputOption=RAW`,
                                       { method: 'POST', body: JSON.stringify({ values }) });
   await append(TAB, tableRows({ runningOpen: true }));
+  const { totals, daily } = statsRows();
+  await append(DAILY_TAB, daily);
+  await append(TOTALS_TAB, totals);
   await append(SETTINGS_TAB, settingsRows());
   await append(DATA_TAB, chunks.map(c => [c]));
 }
