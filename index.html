@@ -190,7 +190,6 @@
 
 <div class="bar">
   <button class="btn" id="stop">Stopp</button>
-  <button class="btn" id="csv">CSV</button>
   <button class="btn" id="manage">Kategorien</button>
 </div>
 <button class="sync-line" id="syncLine" hidden><span>☁</span><span class="st" id="syncStatus"></span><span>›</span></button>
@@ -535,13 +534,12 @@ function tick() {
 
 function render() { buildTiles(); renderLog(); tick(); if (view === 'timeline') renderTimeline(); }
 
-// ---- export table (CSV and Google Sheet) ----
-// Header + one row per entry, chronological. The running entry is either cut off
-// at "now" (CSV) or listed as still running with an empty end (sheet).
-function tableRows({ runningOpen = false } = {}) {
+// ---- table for the "Einträge" tab of the Google Sheet ----
+// Header + one row per entry, chronological; the running entry is listed with an empty end.
+function tableRows() {
   const now = Date.now();
   const rows = state.entries.map(e => ({ ...e }));
-  if (state.active) rows.push({ ...state.active, end: runningOpen ? null : now });
+  if (state.active) rows.push({ ...state.active });
   const key = e => isAdj(e) ? e.at : e.start;
   rows.sort((a, b) => key(a) - key(b));
   const kind = e => catOf(e.cat).kind === 'break' ? 'Pause' : 'Arbeit';
@@ -555,24 +553,6 @@ function tableRows({ runningOpen = false } = {}) {
          fmtDur(end - e.start), Math.round((end - e.start) / 60000), e.end ? 'Zeit' : 'läuft', kind(e)]);
   }
   return out;
-}
-
-function downloadCsv() {
-  const rows = tableRows();
-  // quote fields containing separators (category names are free text)
-  const field = v => /[;"\r\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : v;
-  const lines = rows.map(r => r.map(field).join(';'));
-  const first = rows.length > 1 ? rows[1][1] : fmtDate(Date.now());
-  const last = rows.length > 1 ? rows.at(-1)[1] : first;
-  // BOM so Excel opens umlauts correctly
-  const blob = new Blob(['﻿' + lines.join('\r\n') + '\r\n'], { type: 'text/csv;charset=utf-8' });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = first === last ? `arbeitszeit-${first}.csv` : `arbeitszeit-${first}_bis_${last}.csv`;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
 // ---- category dialog: backdate switch / ±correction ----
@@ -974,7 +954,7 @@ async function writeRemote() {
   // append (unlike update) grows the grid when there are more rows than the sheet has
   const append = (tab, values) => api(`${SHEETS}/${id}/values/${range(tab, '!A1')}:append?valueInputOption=RAW`,
                                       { method: 'POST', body: JSON.stringify({ values }) });
-  await append(TAB, tableRows({ runningOpen: true }));
+  await append(TAB, tableRows());
   const { totals, daily } = statsRows();
   await append(DAILY_TAB, daily);
   await append(TOTALS_TAB, totals);
@@ -1237,7 +1217,6 @@ for (const el of [tlEl, $('tlAdj')]) {
 
 $('more').addEventListener('click', () => { logDays += LOG_STEP_DAYS; renderLog(); });
 $('stop').addEventListener('click', () => switchTo(null));
-$('csv').addEventListener('click', downloadCsv);
 
 // Times are derived from timestamps, so the display catches up after the phone slept
 setInterval(() => { tick(); if (catDlg.open) updateCatDlg(); }, 1000);
