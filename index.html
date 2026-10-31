@@ -260,17 +260,17 @@
   <p class="sub" id="syncInfo"></p>
   <div id="syncConflict" hidden>
     <p class="sub" id="conflictText"></p>
-    <button class="btn" id="conflictPull">Daten aus dem Sheet hierher laden</button>
-    <button class="btn" id="conflictPush">Daten von diesem Gerät hochladen</button>
+    <button class="btn apply" id="conflictPull">Ja, Daten laden</button>
+    <button class="btn" id="conflictPush">Nein, Sheet überschreiben</button>
   </div>
   <p class="msg" id="syncMsg"></p>
   <div class="bar">
     <button class="btn" id="syncClose">Schließen</button>
-    <button class="btn apply" id="syncGo">Jetzt synchronisieren</button>
+    <button class="btn apply" id="syncGo">Ins Sheet hochladen</button>
   </div>
   <div class="links">
     <a id="syncOpen" target="_blank" rel="noopener" hidden>Sheet öffnen</a>
-    <button id="syncRestore" hidden>Aus Sheet wiederherstellen</button>
+    <button id="syncPull">Vom Sheet laden</button>
     <button id="syncDisconnect" hidden>Trennen</button>
   </div>
 </dialog>
@@ -782,17 +782,17 @@ $('catsDone').addEventListener('click', () => {
 // every sync. A hidden tab keeps the raw app data so another device can restore from it.
 const GOOGLE_CLIENT_ID = '1019469281637-cvr48b89o8j5umaeoai43fdbps938nm6.apps.googleusercontent.com'; // OAuth client ID (type "Web") from the Google Cloud Console
 const SCOPE = 'https://www.googleapis.com/auth/drive.file'; // only files this app created
-const SHEET_TITLE = 'Arbeitszeit (custom-timer)', TAB = 'Einträge', DATA_TAB = '_app-daten';
+const SHEET_TITLE = 'Arbeitszeit (custom-timer)', TAB = 'Einträge', SETTINGS_TAB = 'Einstellungen', DATA_TAB = '_app-daten';
+const TABS = [TAB, SETTINGS_TAB, DATA_TAB];
 const SHEETS = 'https://sheets.googleapis.com/v4/spreadsheets';
 const SYNC_KEY = 'worktimer.sync';
 
-// { deviceId, sheetId, lastSync, token, tokenExp, error, conflict }
+// { sheetId, lastSync, token, tokenExp, error, conflict }
 let sync = (() => { try { return JSON.parse(localStorage.getItem(SYNC_KEY)) ?? {}; } catch { return {}; } })();
 const saveSync = () => { try { localStorage.setItem(SYNC_KEY, JSON.stringify(sync)); } catch {} };
-if (!sync.deviceId) { sync.deviceId = crypto.randomUUID(); saveSync(); }
 
 const hasToken = () => !!sync.token && sync.tokenExp > Date.now();
-let tokenClient = null, afterToken = null, syncing = false;
+let tokenClient = null, afterToken = null, syncing = false, syncNotice = '';
 
 // Google's sign-in script; loaded in the background so a tap can open the login popup directly
 function loadGis() {
@@ -842,8 +842,8 @@ async function api(url, opts = {}, { allow404 = false } = {}) {
 }
 const range = (tab, cell = '') => encodeURIComponent(`'${tab}'${cell}`);
 
-// Find or create the spreadsheet (with both tabs)
-async function ensureSheet() {
+// Find or create the spreadsheet (with all tabs)
+async function ensureSheet({ create = true } = {}) {
   if (!sync.sheetId) {
     // created earlier, e.g. on another device? drive.file only lists this app's own files
     const q = encodeURIComponent(`name='${SHEET_TITLE}' and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false`);
@@ -851,19 +851,20 @@ async function ensureSheet() {
     sync.sheetId = found.files?.[0]?.id ?? null;
   }
   if (!sync.sheetId) {
+    if (!create) throw new Error('In deinem Google Drive gibt es noch kein Sheet dieser App.');
     const created = await api(SHEETS, { method: 'POST', body: JSON.stringify({
       properties: { title: SHEET_TITLE },
-      sheets: [{ properties: { title: TAB } }, { properties: { title: DATA_TAB, hidden: true } }],
+      sheets: TABS.map(title => ({ properties: { title, hidden: title === DATA_TAB } })),
     }) });
     sync.sheetId = created.spreadsheetId;
     saveSync();
     return;
   }
   const meta = await api(`${SHEETS}/${sync.sheetId}?fields=sheets.properties.title`, {}, { allow404: true });
-  if (!meta) { sync.sheetId = null; return ensureSheet(); } // deleted in Drive
+  if (!meta) { sync.sheetId = null; return ensureSheet({ create }); } // deleted in Drive
   saveSync();
   const titles = meta.sheets.map(t => t.properties.title);
-  const missing = [TAB, DATA_TAB].filter(t => !titles.includes(t));
+  const missing = TABS.filter(t => !titles.includes(t));
   if (missing.length) {
     await api(`${SHEETS}/${sync.sheetId}:batchUpdate`, { method: 'POST', body: JSON.stringify({
       requests: missing.map(title => ({ addSheet: { properties: { title, hidden: title === DATA_TAB } } })),
@@ -879,35 +880,70 @@ async function readRemote() {
   catch { return null; }
 }
 
+// "Einstellungen" tab: one readable row per category (also editable by hand, see readSettings)
+const SETTINGS_HEAD = ['ID', 'Name', 'Farbe', 'Art', 'Gelöscht'];
+const settingsRows = () => [SETTINGS_HEAD, ...state.cats.map(c =>
+  [c.id, c.name, c.color, c.kind === 'break' ? 'Pause' : 'Arbeit', c.hidden ? 'ja' : ''])];
+
+// Categories from the "Einstellungen" tab, so changes made there by hand are picked up on download
+async function readSettings() {
+  const r = await api(`${SHEETS}/${sync.sheetId}/values/${range(SETTINGS_TAB, '!A2:E')}`);
+  const cats = [];
+  for (const [id, name, color, kind, hidden] of r.values ?? []) {
+    if (!name?.trim()) continue;
+    cats.push({
+      id: id?.trim() || 'c' + Date.now().toString(36) + cats.length,
+      name: name.trim().slice(0, 30),
+      color: /^#[0-9a-f]{6}$/i.test(color?.trim() ?? '') ? color.trim()
+        : PALETTE.find(p => !cats.some(c => c.color === p)) ?? PALETTE[cats.length % PALETTE.length],
+      kind: /^pause$/i.test(kind?.trim() ?? '') ? 'break' : 'work',
+      ...(/^(ja|x|1|true)$/i.test(hidden?.trim() ?? '') ? { hidden: true } : {}),
+    });
+  }
+  return cats;
+}
+
 async function writeRemote() {
-  const json = JSON.stringify({ app: 'custom-timer', v: 1, deviceId: sync.deviceId, updatedAt: Date.now(), state });
+  const json = JSON.stringify({ app: 'custom-timer', v: 1, updatedAt: Date.now(), state });
   const chunks = json.match(/[\s\S]{1,40000}/g); // a cell holds at most 50 000 characters
   const id = sync.sheetId;
-  await api(`${SHEETS}/${id}/values:batchClear`, { method: 'POST', body: JSON.stringify({ ranges: [`'${TAB}'`, `'${DATA_TAB}'`] }) });
+  await api(`${SHEETS}/${id}/values:batchClear`, { method: 'POST', body: JSON.stringify({ ranges: TABS.map(t => `'${t}'`) }) });
   // append (unlike update) grows the grid when there are more rows than the sheet has
   const append = (tab, values) => api(`${SHEETS}/${id}/values/${range(tab, '!A1')}:append?valueInputOption=RAW`,
                                       { method: 'POST', body: JSON.stringify({ values }) });
   await append(TAB, tableRows({ runningOpen: true }));
+  await append(SETTINGS_TAB, settingsRows());
   await append(DATA_TAB, chunks.map(c => [c]));
 }
 
-// Only runs on a tap. mode: 'auto' (never overwrites another device's data), 'push' (overwrite), 'pull' (restore)
+// Only runs on a tap. 'push' overwrites the sheet with this device's data, 'pull' the other way round.
+// 'auto' is a push that first asks when this device is still empty but the sheet already has data.
 async function runSync(mode = 'auto') {
   if (syncing) return;
   syncing = true;
   sync.error = null;
-  updateSyncUi('Synchronisiere …');
+  syncNotice = '';
+  updateSyncUi(mode === 'pull' ? 'Lade vom Sheet …' : 'Lade ins Sheet hoch …');
   try {
-    await ensureSheet();
+    await ensureSheet({ create: mode !== 'pull' });
     const remote = await readRemote();
     if (mode === 'pull') {
-      if (!remote) throw new Error('Im Sheet sind noch keine App-Daten.');
+      if (!remote) throw new Error('Im Sheet sind noch keine Daten dieser App.');
+      const cats = await readSettings();
       state = remote.state;
+      if (cats.length) {
+        // categories from the "Einstellungen" tab; ones that entries still need are kept as deleted
+        const ids = new Set(cats.map(c => c.id));
+        state.cats = [...cats, ...remote.state.cats.filter(c => !ids.has(c.id) && hasEntries(c.id)).map(c => ({ ...c, hidden: true }))];
+        const run = state.cats.find(c => c.id === state.active?.cat);
+        if (run) run.hidden = false; // never hide the running one
+      }
       save();
       render();
+      syncNotice = 'Daten aus dem Sheet geladen.';
     } else {
-      // someone else wrote since our last sync: don't overwrite silently
-      if (mode === 'auto' && remote && remote.deviceId !== sync.deviceId && remote.updatedAt > (sync.lastSync ?? 0)) {
+      const fresh = !state.entries.length && !state.active;
+      if (mode === 'auto' && fresh && remote?.state.entries.length) {
         sync.conflict = { updatedAt: remote.updatedAt, entries: remote.state.entries.length };
         saveSync();
         return;
@@ -934,7 +970,7 @@ function updateSyncUi(busy) {
   $('syncLine').hidden = !GOOGLE_CLIENT_ID;
   let line, cls = '';
   if (busy) line = busy;
-  else if (sync.conflict) { line = 'Sheet enthält Daten eines anderen Geräts – antippen'; cls = 'warn'; }
+  else if (sync.conflict) { line = 'Im Sheet liegen schon Daten – antippen'; cls = 'warn'; }
   else if (sync.error) { line = `Sync fehlgeschlagen – antippen`; cls = 'err'; }
   else if (!sync.lastSync) line = 'Mit Google Sheet synchronisieren';
   else {
@@ -946,24 +982,25 @@ function updateSyncUi(busy) {
 
   if (!$('syncDlg').open) return;
   $('syncInfo').textContent = !sync.sheetId
-    ? 'Deine Zeiten werden in eine Tabelle in deinem Google Drive gespiegelt. Die App sieht nur Dateien, die sie selbst angelegt hat.'
-    : 'Das Sheet ist eine Kopie: Es wird nur aktualisiert, wenn du hier synchronisierst, und Änderungen direkt im Sheet werden dabei überschrieben.';
+    ? 'Deine Zeiten und Kategorien werden in eine Tabelle in deinem Google Drive kopiert. Die App sieht nur Dateien, die sie selbst angelegt hat.'
+    : 'Hochladen ersetzt den Inhalt des Sheets durch die Daten dieses Geräts. „Vom Sheet laden“ ersetzt umgekehrt die Daten hier.';
   $('syncConflict').hidden = !sync.conflict;
-  if (sync.conflict) $('conflictText').textContent = `Im Sheet liegen Daten von einem anderen Gerät (Stand ${fmtWhen(sync.conflict.updatedAt)}, ${sync.conflict.entries} Einträge). Welche sollen gelten?`;
-  $('syncMsg').textContent = busy || sync.error || (sync.lastSync ? `Zuletzt synchronisiert: ${fmtWhen(sync.lastSync)}` : '');
+  if (sync.conflict) $('conflictText').textContent = `Im Sheet liegen schon ${sync.conflict.entries} ${sync.conflict.entries === 1 ? 'Eintrag' : 'Einträge'} (Stand ${fmtWhen(sync.conflict.updatedAt)}), hier noch keine. Vorhandene Daten laden?`;
+  $('syncMsg').textContent = busy || sync.error || syncNotice || (sync.lastSync ? `Zuletzt synchronisiert: ${fmtWhen(sync.lastSync)}` : '');
   $('syncMsg').classList.toggle('err', !busy && !!sync.error);
   $('syncGo').disabled = !!busy || !!sync.conflict;
-  $('syncGo').textContent = sync.sheetId ? 'Jetzt synchronisieren' : 'Anmelden & synchronisieren';
   $('syncOpen').hidden = !sync.sheetId;
   if (sync.sheetId) $('syncOpen').href = `https://docs.google.com/spreadsheets/d/${sync.sheetId}/edit`;
-  $('syncRestore').hidden = $('syncDisconnect').hidden = !sync.sheetId;
+  $('syncDisconnect').hidden = !sync.sheetId;
+  $('syncPull').disabled = !!busy;
 }
 
 const syncDlg = $('syncDlg');
 $('syncLine').addEventListener('click', () => {
   if (document.querySelector('dialog[open]')) return;
-  for (const b of [$('syncRestore'), $('conflictPull'), $('conflictPush')]) b.classList.remove('armed');
-  $('syncRestore').textContent = 'Aus Sheet wiederherstellen';
+  $('syncPull').classList.remove('armed');
+  $('syncPull').textContent = 'Vom Sheet laden';
+  syncNotice = '';
   syncDlg.showModal();
   updateSyncUi();
 });
@@ -971,18 +1008,20 @@ $('syncClose').addEventListener('click', () => syncDlg.close());
 $('syncGo').addEventListener('click', () => withToken(() => runSync('auto')));
 $('conflictPull').addEventListener('click', () => withToken(() => runSync('pull')));
 $('conflictPush').addEventListener('click', () => withToken(() => runSync('push')));
-$('syncRestore').addEventListener('click', ev => {
+$('syncPull').addEventListener('click', ev => {
   const b = ev.currentTarget;
   if (!b.classList.contains('armed')) { // two-step: replaces everything on this device
     b.classList.add('armed');
     b.textContent = 'Daten hier ersetzen?';
     return;
   }
+  b.classList.remove('armed');
+  b.textContent = 'Vom Sheet laden';
   withToken(() => runSync('pull'));
 });
 $('syncDisconnect').addEventListener('click', () => {
   if (sync.token) window.google?.accounts?.oauth2?.revoke(sync.token, () => {});
-  sync = { deviceId: sync.deviceId };
+  sync = {};
   saveSync();
   updateSyncUi();
 });
