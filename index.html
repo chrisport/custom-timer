@@ -1,0 +1,892 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#16181d">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Timer">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-180.png">
+<title>Arbeitszeit</title>
+<style>
+  :root {
+    --bg: #16181d;
+    --card: #22252d;
+    --text: #eef0f4;
+    --muted: #8b90a0;
+    --line: #2f333d;
+    --danger: #e5484d;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); }
+  body {
+    font: 16px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    padding: max(16px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom));
+    max-width: 520px; margin: 0 auto;
+  }
+  header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 12px; }
+  h1 { font-size: 20px; margin: 0; }
+  #total { color: var(--muted); font-variant-numeric: tabular-nums; }
+
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .cat {
+    border: 2px solid transparent; border-radius: 16px; background: var(--card); color: var(--text);
+    padding: 18px 14px; min-height: 120px; text-align: left; font: inherit; cursor: pointer;
+    display: flex; flex-direction: column; justify-content: space-between;
+    transition: transform .08s, background .15s;
+  }
+  .cat:active { transform: scale(.97); }
+  .cat, #log li { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+  .cat { touch-action: manipulation; }
+  .cat .name { font-weight: 600; font-size: 17px; display: flex; align-items: center; gap: 8px; }
+  .cat .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--c); }
+  .cat .time { font-size: 28px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: .5px; }
+  .cat .state { font-size: 13px; color: var(--muted); min-height: 1.2em; }
+  .cat.active { border-color: var(--c); background: color-mix(in srgb, var(--c) 22%, var(--card)); }
+  .cat.active .state { color: var(--text); }
+
+  .bar { display: flex; gap: 10px; margin-top: 14px; }
+  .btn {
+    flex: 1; border: 0; border-radius: 12px; padding: 14px 10px; font: inherit; font-weight: 600;
+    background: var(--card); color: var(--text); cursor: pointer;
+  }
+  .btn:disabled { opacity: .4; }
+  .btn.danger { color: var(--danger); }
+
+  .hint { margin: 10px 2px 0; font-size: 13px; color: var(--muted); }
+  h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 26px 0 4px; }
+  #empty { color: var(--muted); font-size: 14px; }
+  #log { list-style: none; padding: 0; margin: 0; }
+  #log .day { padding: 18px 2px 4px; font-size: 13px; font-weight: 600; color: var(--muted); }
+  #log li[data-idx] {
+    display: grid; grid-template-columns: 12px 1fr auto; gap: 10px; align-items: center;
+    padding: 10px 2px; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; cursor: context-menu;
+  }
+  #log .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--c); }
+  #log .span { color: var(--muted); font-size: 14px; }
+  #log .dur { font-weight: 600; }
+
+  dialog {
+    border: 0; border-radius: 16px; background: var(--card); color: var(--text);
+    padding: 20px; width: min(90vw, 360px);
+  }
+  dialog::backdrop { background: rgba(0,0,0,.6); }
+  dialog h3 { margin: 0 0 12px; }
+  dialog .sub { margin: 0 0 12px; color: var(--muted); font-size: 14px; }
+  dialog .bar { margin-top: 0; }
+  dialog .btn { background: var(--line); }
+  dialog .btn.apply { background: var(--c, #4f8cff); color: #fff; }
+  dialog .btn.del { background: transparent; color: var(--danger); margin-top: 10px; width: 100%; }
+  dialog .btn.del.armed { background: var(--danger); color: #fff; }
+
+  .seg { display: flex; background: var(--bg); border-radius: 10px; padding: 3px; margin-bottom: 14px; }
+  .seg button {
+    flex: 1; border: 0; border-radius: 8px; padding: 8px; font: inherit; font-size: 14px; font-weight: 600;
+    background: transparent; color: var(--muted); cursor: pointer;
+  }
+  .seg button.on { background: var(--line); color: var(--text); }
+
+  .chips { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 12px; }
+  .chips.four { grid-template-columns: repeat(4, 1fr); }
+  .chips .btn { padding: 12px 4px; font-size: 14px; font-variant-numeric: tabular-nums; }
+  input, select {
+    font: inherit; font-size: 20px; font-weight: 600; width: 100%; min-width: 0;
+    background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 10px; padding: 8px;
+    color-scheme: dark;
+  }
+  input { text-align: center; }
+  select { font-size: 17px; }
+  .fields { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
+  label { display: block; font-size: 13px; color: var(--muted); }
+  label > * { margin-top: 4px; }
+  .run-label { font-size: 20px; font-weight: 600; padding: 9px 0; text-align: center; color: var(--text); }
+  .delta { display: flex; align-items: center; gap: 10px; }
+  .msg { min-height: 2.6em; margin: 8px 0 12px; font-size: 14px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .msg.err { color: var(--danger); }
+
+  .seg.nav { background: var(--card); margin: 0 0 14px; }
+  #noCats { grid-column: 1 / -1; color: var(--muted); font-size: 14px; text-align: center; padding: 30px 0; }
+
+  #catList { list-style: none; padding: 0; margin: 0 0 12px; max-height: 50vh; overflow-y: auto; }
+  #catList li { display: flex; align-items: center; gap: 6px; padding: 6px 0; }
+  #catList .swatch { flex: 0 0 28px; height: 28px; border-radius: 50%; border: 0; background: var(--c); cursor: pointer; }
+  #catList input { flex: 1; font-size: 16px; text-align: left; padding: 8px 10px; }
+  #catList .kind { flex: 0 0 64px; padding: 9px 0; font-size: 13px; }
+  #catList .kind.break { color: var(--muted); }
+  #catList .rm { flex: 0 0 40px; padding: 9px 0; color: var(--danger); background: transparent; font-size: 18px; line-height: 1; }
+  #catList .rm.armed { flex-basis: 84px; background: var(--danger); color: #fff; font-size: 13px; }
+  #catList .rm:disabled { opacity: .3; }
+  .add { display: flex; gap: 8px; }
+  .add input { flex: 1; font-size: 16px; text-align: left; padding: 8px 10px; }
+  .add .btn { flex: 0 0 48px; padding: 8px 0; font-size: 20px; line-height: 1; }
+
+  .daynav { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .daynav .btn { flex: 0 0 48px; padding: 10px 0; font-size: 20px; line-height: 1; }
+  .daynav #dayTitle { flex: 1; text-align: center; font-weight: 600; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 13px; color: var(--muted); margin-bottom: 10px; font-variant-numeric: tabular-nums; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .legend i { width: 8px; height: 8px; border-radius: 50%; background: var(--c); }
+  .legend b { color: var(--text); font-weight: 600; }
+  .zoom { display: flex; gap: 8px; margin-bottom: 10px; }
+  .zoom .btn { padding: 8px 0; font-size: 15px; }
+  .zoom .btn.sq { flex: 0 0 48px; font-size: 20px; line-height: 1; }
+  .tl-scroll {
+    position: relative; height: max(320px, calc(100dvh - 310px)); overflow-y: auto; overscroll-behavior: contain;
+    background: var(--card); border-radius: 14px; touch-action: pan-y; -webkit-overflow-scrolling: touch;
+  }
+  .tl { position: relative; margin: 12px 0; }
+  .tl .grid-line { position: absolute; left: 56px; right: 0; border-top: 1px solid var(--line); }
+  .tl .grid-line.minor { border-top-style: dashed; opacity: .55; }
+  .tl .hour { position: absolute; left: 0; width: 48px; text-align: right; font-size: 12px; color: var(--muted); transform: translateY(-50%); font-variant-numeric: tabular-nums; }
+  .tl .hour.minor { font-size: 11px; opacity: .7; }
+  .tl .blk {
+    position: absolute; left: 62px; right: 8px; min-height: 2px; overflow: hidden; cursor: pointer;
+    background: color-mix(in srgb, var(--c) 30%, var(--card)); border-left: 4px solid var(--c); border-radius: 6px;
+    padding: 2px 8px; font-size: 13px; line-height: 1.3; font-variant-numeric: tabular-nums;
+    -webkit-user-select: none; user-select: none;
+  }
+  .tl .blk.running { background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--c) 30%, var(--card)) 0 8px, color-mix(in srgb, var(--c) 20%, var(--card)) 8px 16px); }
+  .tl .blk b { font-weight: 600; }
+  .tl .blk .t { color: color-mix(in srgb, var(--text) 70%, transparent); }
+  .tl .now { position: absolute; left: 52px; right: 0; border-top: 2px solid var(--danger); }
+  .tl .now::before { content: ''; position: absolute; left: -4px; top: -5px; width: 8px; height: 8px; border-radius: 50%; background: var(--danger); }
+  .tl-empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font-size: 14px; pointer-events: none; }
+  #tlAdj { font-size: 13px; color: var(--muted); margin-top: 10px; }
+  #tlAdj div { padding: 2px 0; cursor: pointer; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Arbeitszeit</h1>
+  <span id="total"></span>
+</header>
+
+<div class="seg nav">
+  <button data-view="record" class="on">Erfassen</button>
+  <button data-view="timeline">Timeline</button>
+</div>
+
+<section id="viewRecord">
+<div class="grid" id="cats"></div>
+<p class="hint">Lange drücken oder Rechtsklick: auf eine Kategorie zum Zurückdatieren, auf einen Eintrag zum Bearbeiten oder Löschen.</p>
+
+<div class="bar">
+  <button class="btn" id="stop">Stopp</button>
+  <button class="btn" id="csv">CSV</button>
+  <button class="btn" id="manage">Kategorien</button>
+</div>
+
+<h2>Einträge</h2>
+<p id="empty">Noch nichts erfasst. Tippe auf eine Kategorie zum Starten.</p>
+<ul id="log"></ul>
+</section>
+
+<section id="viewTimeline" hidden>
+  <div class="daynav">
+    <button class="btn" id="dayPrev" aria-label="Vorheriger Tag">‹</button>
+    <span id="dayTitle"></span>
+    <button class="btn" id="dayNext" aria-label="Nächster Tag">›</button>
+  </div>
+  <div class="legend" id="tlLegend"></div>
+  <div class="zoom">
+    <button class="btn sq" id="zoomOut" aria-label="Herauszoomen">−</button>
+    <button class="btn" id="zoomFit">Einpassen</button>
+    <button class="btn sq" id="zoomIn" aria-label="Hineinzoomen">+</button>
+  </div>
+  <div class="tl-scroll" id="tlScroll"><div class="tl" id="tl"></div></div>
+  <div id="tlAdj"></div>
+</section>
+
+<!-- Long press on a category: backdate the switch, or ±correction -->
+<dialog id="catDlg">
+  <h3 id="catTitle"></h3>
+  <div class="seg">
+    <button data-mode="start" class="on">Startzeit</button>
+    <button data-mode="adj">± Korrektur</button>
+  </div>
+  <section id="modeStart">
+    <p class="sub" id="catSub"></p>
+    <div class="chips four">
+      <button class="btn" data-ago="5">−5′</button>
+      <button class="btn" data-ago="10">−10′</button>
+      <button class="btn" data-ago="15">−15′</button>
+      <button class="btn" data-ago="30">−30′</button>
+    </div>
+    <input id="catTime" type="time" aria-label="Startzeit">
+  </section>
+  <section id="modeAdj" hidden>
+    <p class="sub">Zeit ohne Uhrzeit hinzufügen oder abziehen (nur für Sonderfälle).</p>
+    <div class="chips">
+      <button class="btn" data-min="-30">−30</button>
+      <button class="btn" data-min="-15">−15</button>
+      <button class="btn" data-min="-5">−5</button>
+      <button class="btn" data-min="5">+5</button>
+      <button class="btn" data-min="15">+15</button>
+      <button class="btn" data-min="30">+30</button>
+    </div>
+    <div class="delta">
+      <input id="adjMin" type="text" inputmode="text" value="0" aria-label="Minuten">
+      <span>Min</span>
+    </div>
+  </section>
+  <p class="msg" id="catMsg"></p>
+  <div class="bar">
+    <button class="btn" id="catCancel">Abbrechen</button>
+    <button class="btn apply" id="catApply">Übernehmen</button>
+  </div>
+</dialog>
+
+<!-- Manage categories -->
+<dialog id="catsDlg">
+  <h3>Kategorien</h3>
+  <p class="sub">Punkt antippen ändert die Farbe. „Arbeit“ / „Pause“ legt fest, wohin die Zeit in den Summen zählt.</p>
+  <ul id="catList"></ul>
+  <form class="add" id="addForm">
+    <input id="newCat" maxlength="30" placeholder="Neue Kategorie" autocomplete="off">
+    <button class="btn" aria-label="Hinzufügen">+</button>
+  </form>
+  <p class="msg" id="catsMsg"></p>
+  <div class="bar"><button class="btn apply" id="catsDone">Fertig</button></div>
+</dialog>
+
+<!-- Long press on an entry: edit or delete -->
+<dialog id="entryDlg">
+  <h3>Eintrag bearbeiten</h3>
+  <section id="eTimed">
+    <label>Kategorie <select id="eCat"></select></label>
+    <div class="fields">
+      <label>Start <input id="eStart" type="time"></label>
+      <label>Ende <input id="eEnd" type="time"><div class="run-label" id="eRunning">läuft</div></label>
+    </div>
+  </section>
+  <p class="sub" id="eAdjInfo"></p>
+  <p class="msg" id="eMsg"></p>
+  <div class="bar">
+    <button class="btn" id="eCancel">Abbrechen</button>
+    <button class="btn apply" id="eSave">Speichern</button>
+  </div>
+  <button class="btn del" id="eDel">Eintrag löschen</button>
+</dialog>
+
+<script>
+const PALETTE = ['#4f8cff', '#2fbf71', '#f0a430', '#9a8cff', '#22c3c3', '#ff7ab6', '#c0ca33', '#ff8a5b', '#a1887f', '#8b90a0'];
+const DEFAULT_CATS = [
+  { id: 'work',  name: 'Arbeit', color: PALETTE[0], kind: 'work' },
+  { id: 'break', name: 'Pause',  color: PALETTE[3], kind: 'break' },
+];
+// Categories before they became configurable; kept for data recorded back then
+const LEGACY_CATS = [
+  { id: 'tp',       name: 'TP',            color: PALETTE[0], kind: 'work' },
+  { id: 'billable', name: 'Billable',      color: PALETTE[1], kind: 'work' },
+  { id: 'wc',       name: 'Works Council', color: PALETTE[2], kind: 'work' },
+  { id: 'pause',    name: 'Pause',         color: PALETTE[3], kind: 'break' },
+];
+const KEY = 'worktimer.v1';
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"']/g, ch => `&#${ch.charCodeAt(0)};`);
+
+// state: { cats: [{id, name, color, kind: 'work'|'break', hidden?}],
+//          entries: [{cat, start, end} | {cat, adj, at}], active: {cat, start} | null }
+// times in ms since epoch; adj = manual correction in ms (may be negative).
+// Timed entries are kept in chronological order and never overlap.
+// Deleted categories that still have entries stay in cats with hidden: true.
+let state = load();
+
+function load() {
+  let s = null;
+  try { s = JSON.parse(localStorage.getItem(KEY)); } catch {}
+  if (!s || !Array.isArray(s.entries)) s = { entries: [], active: null };
+  if (!Array.isArray(s.cats)) {
+    const used = new Set([...s.entries.map(e => e.cat), s.active?.cat]);
+    s.cats = structuredClone(LEGACY_CATS.some(c => used.has(c.id)) ? LEGACY_CATS : DEFAULT_CATS);
+  }
+  return s;
+}
+const catOf = id => state.cats.find(c => c.id === id) ?? { id, name: '?', color: '#8b90a0', kind: 'work' };
+const visibleCats = () => state.cats.filter(c => !c.hidden);
+const sumKind = (t, kind) => state.cats.reduce((sum, c) => sum + (c.kind === kind ? t[c.id] ?? 0 : 0), 0);
+function save() {
+  try { localStorage.setItem(KEY, JSON.stringify(state)); } catch {}
+}
+const commit = () => { save(); render(); };
+
+const isAdj = e => e.adj != null;
+const catName = e => catOf(e.cat).name;
+// Chronological timed entries; the running one (end undefined) comes last
+function timeline() {
+  const list = state.entries.filter(e => !isAdj(e)).sort((a, b) => a.start - b.start);
+  if (state.active) list.push(state.active);
+  return list;
+}
+
+function switchTo(cat, at = Date.now()) {
+  if (state.active) {
+    const same = state.active.cat === cat;
+    state.entries.push({ cat: state.active.cat, start: state.active.start, end: at });
+    state.active = null;
+    if (same) return commit(); // tapping the running one stops it
+  }
+  if (cat) state.active = { cat, start: at };
+  commit();
+}
+
+// ---- time helpers ----
+const pad = n => String(n).padStart(2, '0');
+function fmtDur(ms, withSec = true) {
+  const s = Math.floor(ms / 1000);
+  const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), sec = s % 60;
+  return withSec ? `${h}:${pad(m)}:${pad(sec)}` : `${h}:${pad(m)}`;
+}
+const fmtSigned = ms => (ms < 0 ? '−' : '+') + fmtDur(Math.abs(ms));
+const fmtClock = ts => { const d = new Date(ts); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+const fmtClockSec = ts => { const d = new Date(ts); return `${fmtClock(ts)}:${pad(d.getSeconds())}`; };
+const fmtDate = ts => { const d = new Date(ts); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
+const startOfDay = ts => { const d = new Date(ts); d.setHours(0, 0, 0, 0); return d.getTime(); };
+// "HH:MM" on the same day as base
+function atTime(hhmm, base) {
+  const [h, m] = hhmm.split(':').map(Number);
+  const d = new Date(base); d.setHours(h, m, 0, 0);
+  return d.getTime();
+}
+function dayLabel(ts) {
+  const diff = Math.round((startOfDay(Date.now()) - startOfDay(ts)) / 864e5);
+  if (diff === 0) return 'Heute';
+  if (diff === 1) return 'Gestern';
+  return new Date(ts).toLocaleDateString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric' });
+}
+
+const nextDay = day0 => { const d = new Date(day0); d.setDate(d.getDate() + 1); return d.getTime(); };
+// Time per category on the day starting at day0 (entries crossing midnight only count their part)
+function dayTotals(day0) {
+  const now = Date.now(), day1 = nextDay(day0);
+  const t = Object.fromEntries(state.cats.map(c => [c.id, 0]));
+  const clip = (s, e) => Math.max(0, Math.min(e, day1) - Math.max(s, day0));
+  for (const e of state.entries) {
+    if (isAdj(e)) { if (e.at >= day0 && e.at < day1) t[e.cat] = (t[e.cat] ?? 0) + e.adj; }
+    else t[e.cat] = (t[e.cat] ?? 0) + clip(e.start, e.end);
+  }
+  if (state.active) t[state.active.cat] = (t[state.active.cat] ?? 0) + clip(state.active.start, now);
+  return t;
+}
+const totals = () => dayTotals(startOfDay(Date.now()));
+
+// ---- editing timed entries ----
+// Neighbours that touch the entry (end === start) move along with it.
+function neighbours(e) {
+  const tl = timeline(), i = tl.indexOf(e);
+  return { prev: tl[i - 1], next: tl[i + 1] };
+}
+// Returns an error message, or null if start s / end en (null = running) is valid
+function checkEdit(e, s, en) {
+  const now = Date.now(), { prev, next } = neighbours(e);
+  if (s > now || (en ?? 0) > now) return 'Liegt in der Zukunft.';
+  if (s >= (en ?? now)) return 'Start muss vor dem Ende liegen.';
+  if (prev) {
+    if (prev.end === e.start) { if (s <= prev.start) return `Frühestens nach ${fmtClock(prev.start)} (Start von ${catName(prev)}).`; }
+    else if (s < prev.end) return `Frühestens ${fmtClock(prev.end)} (Ende von ${catName(prev)}).`;
+  }
+  if (next && en != null) {
+    if (next.start === e.end) { if (en >= (next.end ?? now)) return `Spätestens vor ${fmtClock(next.end ?? now)} (Ende von ${catName(next)}).`; }
+    else if (en > next.start) return `Spätestens ${fmtClock(next.start)} (Start von ${catName(next)}).`;
+  }
+  return null;
+}
+function editEffects(e, s, en) {
+  const { prev, next } = neighbours(e), out = [];
+  if (prev && prev.end === e.start && s !== e.start) out.push(`${catName(prev)} endet dann um ${fmtClock(s)}.`);
+  if (next && en != null && next.start === e.end && en !== e.end) out.push(`${catName(next)} beginnt dann um ${fmtClock(en)}.`);
+  return out.join(' ');
+}
+function applyEdit(e, s, en) {
+  const { prev, next } = neighbours(e);
+  if (prev && prev.end === e.start) prev.end = s;
+  if (next && en != null && next.start === e.end) next.start = en;
+  e.start = s;
+  if (en != null) e.end = en;
+}
+
+// ---- long press / right click ----
+function onLongPress(root, selector, handler) {
+  root.addEventListener('contextmenu', ev => {
+    const el = ev.target.closest(selector);
+    if (!el) return;
+    ev.preventDefault();
+    handler(el);
+  });
+  // iOS doesn't fire contextmenu on long press, so time it ourselves
+  let timer = null, fired = false, x0 = 0, y0 = 0;
+  root.addEventListener('touchstart', ev => {
+    fired = false;
+    const el = ev.target.closest(selector);
+    if (!el) return;
+    ({ clientX: x0, clientY: y0 } = ev.touches[0]);
+    timer = setTimeout(() => { fired = true; handler(el); }, 500);
+  }, { passive: true });
+  root.addEventListener('touchmove', ev => {
+    const t = ev.touches[0];
+    if (Math.hypot(t.clientX - x0, t.clientY - y0) > 10) clearTimeout(timer); // scrolling
+  }, { passive: true });
+  root.addEventListener('touchcancel', () => clearTimeout(timer));
+  root.addEventListener('touchend', ev => { clearTimeout(timer); if (fired) ev.preventDefault(); }); // no click after long press
+}
+
+// ---- rendering ----
+const catsEl = $('cats'), logEl = $('log');
+function buildTiles() {
+  catsEl.innerHTML = visibleCats().length ? '' : '<p id="noCats">Lege unter „Kategorien“ eine Kategorie an.</p>';
+  for (const c of visibleCats()) {
+    const b = document.createElement('button');
+    b.className = 'cat';
+    b.style.setProperty('--c', c.color);
+    b.dataset.cat = c.id;
+    b.setAttribute('aria-label', c.name);
+    b.innerHTML = `<span class="name"><span class="dot"></span>${esc(c.name)}</span>
+                   <span class="time">0:00:00</span><span class="state"></span>`;
+    b.addEventListener('click', () => switchTo(c.id));
+    catsEl.appendChild(b);
+  }
+}
+
+// Rebuilt only when state changes, so long presses on rows aren't interrupted
+function renderLog() {
+  const rows = state.entries.map((e, i) => ({ e, idx: i, key: isAdj(e) ? e.at : e.start }));
+  if (state.active) rows.push({ e: state.active, idx: 'active', key: state.active.start });
+  rows.sort((a, b) => b.key - a.key);
+  $('empty').hidden = rows.length > 0;
+  let html = '', day = null;
+  for (const { e, idx, key } of rows) {
+    if (fmtDate(key) !== day) { day = fmtDate(key); html += `<li class="day">${dayLabel(key)}</li>`; }
+    const c = catOf(e.cat);
+    const [sub, dur] = isAdj(e)
+      ? [`Korrektur um ${fmtClock(e.at)}`, fmtSigned(e.adj)]
+      : [`${fmtClock(e.start)} – ${e.end ? fmtClock(e.end) : 'läuft'}`, fmtDur((e.end ?? Date.now()) - e.start)];
+    html += `<li data-idx="${idx}" style="--c:${c.color}"><span class="dot"></span>
+      <span>${esc(c.name)}<br><span class="span">${sub}</span></span><span class="dur">${dur}</span></li>`;
+  }
+  logEl.innerHTML = html;
+}
+
+function tick() {
+  const t = totals();
+  for (const b of catsEl.querySelectorAll('.cat')) {
+    const id = b.dataset.cat, active = state.active?.cat === id;
+    b.classList.toggle('active', active);
+    b.querySelector('.time').textContent = fmtDur(t[id] ?? 0);
+    b.querySelector('.state').textContent = active ? `läuft seit ${fmtClock(state.active.start)}` : '';
+  }
+  $('total').textContent = `Heute: Arbeit ${fmtDur(sumKind(t, 'work'), false)} · Pause ${fmtDur(sumKind(t, 'break'), false)}`;
+  $('stop').disabled = !state.active;
+  const run = logEl.querySelector('[data-idx="active"] .dur');
+  if (run) run.textContent = fmtDur(Date.now() - state.active.start);
+  if (view === 'timeline') tickTimeline();
+}
+
+function render() { buildTiles(); renderLog(); tick(); if (view === 'timeline') renderTimeline(); }
+
+// ---- CSV ----
+function downloadCsv() {
+  const rows = state.entries.map(e => ({ ...e }));
+  if (state.active) rows.push({ ...state.active, end: Date.now() }); // running entry ends "now"
+  const key = e => isAdj(e) ? e.at : e.start;
+  rows.sort((a, b) => key(a) - key(b));
+  // quote fields containing separators (category names are free text)
+  const field = v => /[;"\r\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : v;
+  const kind = e => catOf(e.cat).kind === 'break' ? 'Pause' : 'Arbeit';
+  const lines = [['Kategorie', 'Datum', 'Start', 'Ende', 'Dauer (h:mm:ss)', 'Dauer (min)', 'Typ', 'Art'].join(';')];
+  for (const e of rows) {
+    lines.push((isAdj(e)
+      ? [catName(e), fmtDate(e.at), '', '', (e.adj < 0 ? '-' : '') + fmtDur(Math.abs(e.adj)),
+         Math.round(e.adj / 60000), 'Korrektur', kind(e)]
+      : [catName(e), fmtDate(e.start), fmtClockSec(e.start), fmtClockSec(e.end),
+         fmtDur(e.end - e.start), Math.round((e.end - e.start) / 60000), 'Zeit', kind(e)]).map(field).join(';'));
+  }
+  const first = rows.length ? fmtDate(key(rows[0])) : fmtDate(Date.now());
+  const last = rows.length ? fmtDate(key(rows.at(-1))) : first;
+  // BOM so Excel opens umlauts correctly
+  const blob = new Blob(['﻿' + lines.join('\r\n') + '\r\n'], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = first === last ? `arbeitszeit-${first}.csv` : `arbeitszeit-${first}_bis_${last}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+// ---- category dialog: backdate switch / ±correction ----
+const catDlg = $('catDlg'), catTime = $('catTime'), adjMin = $('adjMin');
+let dlgCat = null, catMode = 'start';
+
+function setCatMode(mode) {
+  catMode = mode;
+  for (const b of catDlg.querySelectorAll('.seg button')) b.classList.toggle('on', b.dataset.mode === mode);
+  $('modeStart').hidden = mode !== 'start';
+  $('modeAdj').hidden = mode !== 'adj';
+  updateCatDlg();
+}
+// What "Übernehmen" would do: { err } or { msg, apply }
+function catPlan() {
+  const now = Date.now(), a = state.active, name = catOf(dlgCat).name;
+  if (catMode === 'adj') {
+    const n = parseInt(adjMin.value.replace('−', '-').replace(/[^\d-]/g, ''), 10) || 0;
+    const cur = totals()[dlgCat] ?? 0;
+    const d = Math.max(n * 60000, -cur); // never below zero
+    return { msg: `Heute: ${fmtDur(cur)} → ${fmtDur(cur + d)}`, ok: d !== 0,
+             apply: () => { state.entries.push({ cat: dlgCat, adj: d, at: now }); commit(); } };
+  }
+  if (!catTime.value) return { err: 'Bitte eine Uhrzeit wählen.' };
+  let at = atTime(catTime.value, now);
+  if (at > now + 60000) at -= 864e5; // e.g. 23:50 entered shortly after midnight
+  at = Math.min(at, now);
+  if (a && a.cat === dlgCat) { // change start of the running entry
+    const err = checkEdit(a, at, null);
+    if (err) return { err };
+    return { msg: editEffects(a, at, null) || `${name} läuft dann seit ${fmtClock(at)}.`, ok: at !== a.start,
+             apply: () => { applyEdit(a, at, null); commit(); } };
+  }
+  if (a && at <= a.start) return { err: `Frühestens nach ${fmtClock(a.start)} (Start von ${catName(a)}).` };
+  const last = timeline().at(-1);
+  if (!a && last && at < last.end) return { err: `Frühestens ${fmtClock(last.end)} (Ende von ${catName(last)}).` };
+  return { msg: a ? `${catName(a)} endet um ${fmtClock(at)}, ${name} läuft ab ${fmtClock(at)}.` : `${name} läuft ab ${fmtClock(at)}.`,
+           ok: true, apply: () => switchTo(dlgCat, at) };
+}
+function updateCatDlg() {
+  if (dlgCat == null) return;
+  const p = catPlan();
+  $('catMsg').textContent = p.err || p.msg;
+  $('catMsg').classList.toggle('err', !!p.err);
+  $('catApply').disabled = !!p.err || !p.ok;
+}
+function openCatDlg(cat) {
+  if (document.querySelector('dialog[open]')) return;
+  dlgCat = cat;
+  const a = state.active, name = catOf(cat).name;
+  catDlg.style.setProperty('--c', catOf(cat).color);
+  $('catTitle').textContent = name;
+  $('catSub').textContent = a?.cat === cat
+    ? `${name} läuft seit ${fmtClock(a.start)}. Neue Startzeit:`
+    : `${name} gestartet um:`;
+  catTime.value = fmtClock(a?.cat === cat ? a.start : Date.now());
+  adjMin.value = '0';
+  setCatMode('start');
+  catDlg.showModal();
+}
+onLongPress(catsEl, '.cat', b => openCatDlg(b.dataset.cat));
+for (const b of catDlg.querySelectorAll('.seg button')) b.addEventListener('click', () => setCatMode(b.dataset.mode));
+for (const chip of catDlg.querySelectorAll('[data-ago]')) {
+  chip.addEventListener('click', () => { catTime.value = fmtClock(Date.now() - chip.dataset.ago * 60000); updateCatDlg(); });
+}
+for (const chip of catDlg.querySelectorAll('[data-min]')) {
+  chip.addEventListener('click', () => {
+    const n = (parseInt(adjMin.value.replace('−', '-'), 10) || 0) + Number(chip.dataset.min);
+    adjMin.value = n > 0 ? `+${n}` : String(n);
+    updateCatDlg();
+  });
+}
+catTime.addEventListener('input', updateCatDlg);
+adjMin.addEventListener('input', updateCatDlg);
+adjMin.addEventListener('focus', () => adjMin.select());
+$('catCancel').addEventListener('click', () => catDlg.close());
+$('catApply').addEventListener('click', () => { const p = catPlan(); catDlg.close(); if (!p.err && p.ok) p.apply(); });
+catDlg.addEventListener('close', () => { dlgCat = null; });
+
+// ---- entry dialog: edit / delete ----
+const entryDlg = $('entryDlg'), eStart = $('eStart'), eEnd = $('eEnd'), eDel = $('eDel');
+let dlgEntry = null, dlgIdx = null;
+
+// Unchanged fields keep their exact (to the second) timestamps
+function entryPlan() {
+  const e = dlgEntry;
+  if (isAdj(e)) return { ok: false };
+  const s = eStart.value === fmtClock(e.start) ? e.start : eStart.value && atTime(eStart.value, e.start);
+  const en = e.end == null ? null : eEnd.value === fmtClock(e.end) ? e.end : eEnd.value && atTime(eEnd.value, e.end);
+  if (!s || en === '') return { err: 'Bitte eine Uhrzeit wählen.' };
+  const err = checkEdit(e, s, en);
+  if (err) return { err };
+  const cat = $('eCat').value;
+  return { msg: editEffects(e, s, en), ok: s !== e.start || en !== (e.end ?? null) || cat !== e.cat,
+           apply: () => { applyEdit(e, s, en); e.cat = cat; commit(); } };
+}
+function updateEntryDlg() {
+  const p = entryPlan();
+  $('eMsg').textContent = p.err || p.msg || '';
+  $('eMsg').classList.toggle('err', !!p.err);
+  $('eSave').disabled = !!p.err || !p.ok;
+}
+function openEntryDlg(idx) {
+  if (document.querySelector('dialog[open]')) return;
+  dlgIdx = idx;
+  dlgEntry = dlgIdx === 'active' ? state.active : state.entries[dlgIdx];
+  const e = dlgEntry, adj = isAdj(e);
+  entryDlg.style.setProperty('--c', catOf(e.cat).color);
+  $('eTimed').hidden = adj;
+  $('eAdjInfo').hidden = !adj;
+  $('eSave').hidden = adj;
+  if (adj) $('eAdjInfo').textContent = `${catName(e)}: Korrektur ${fmtSigned(e.adj)} vom ${dayLabel(e.at)}, ${fmtClock(e.at)}.`;
+  else {
+    $('eCat').innerHTML = state.cats.filter(c => !c.hidden || c.id === e.cat)
+      .map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
+    $('eCat').value = e.cat;
+    eStart.value = fmtClock(e.start);
+    eEnd.hidden = e.end == null;
+    $('eRunning').hidden = e.end != null;
+    if (e.end != null) eEnd.value = fmtClock(e.end);
+  }
+  eDel.classList.remove('armed');
+  eDel.textContent = 'Eintrag löschen';
+  updateEntryDlg();
+  entryDlg.showModal();
+}
+onLongPress(logEl, 'li[data-idx]', li => openEntryDlg(li.dataset.idx));
+for (const el of [eStart, eEnd, $('eCat')]) el.addEventListener('input', updateEntryDlg);
+$('eCancel').addEventListener('click', () => entryDlg.close());
+$('eSave').addEventListener('click', () => { const p = entryPlan(); entryDlg.close(); if (!p.err && p.ok) p.apply(); });
+eDel.addEventListener('click', () => {
+  if (!eDel.classList.contains('armed')) { // two-step delete
+    eDel.classList.add('armed');
+    eDel.textContent = 'Wirklich löschen?';
+    return;
+  }
+  if (dlgIdx === 'active') state.active = null;
+  else state.entries.splice(Number(dlgIdx), 1);
+  entryDlg.close();
+  commit();
+});
+
+// ---- manage categories ----
+const catsDlg = $('catsDlg'), catList = $('catList');
+const hasEntries = id => state.entries.some(e => e.cat === id) || state.active?.cat === id;
+function renderCatList() {
+  const vis = visibleCats();
+  catList.innerHTML = vis.map(c => {
+    const running = state.active?.cat === c.id;
+    return `<li data-id="${c.id}" style="--c:${c.color}">
+      <button class="swatch" data-act="color" aria-label="Farbe ändern"></button>
+      <input value="${esc(c.name)}" maxlength="30" aria-label="Name">
+      <button class="btn kind ${c.kind}" data-act="kind">${c.kind === 'break' ? 'Pause' : 'Arbeit'}</button>
+      <button class="btn rm" data-act="rm" aria-label="Löschen" ${running || vis.length === 1 ? 'disabled' : ''}
+        title="${running ? 'Läuft gerade – erst stoppen' : vis.length === 1 ? 'Mindestens eine Kategorie' : 'Löschen'}">✕</button>
+    </li>`;
+  }).join('');
+}
+const catsMsg = t => { $('catsMsg').textContent = t; };
+function openCatsDlg() {
+  if (document.querySelector('dialog[open]')) return;
+  renderCatList();
+  catsMsg('');
+  $('newCat').value = '';
+  catsDlg.showModal();
+}
+catList.addEventListener('click', ev => {
+  const btn = ev.target.closest('button[data-act]');
+  if (!btn) return;
+  const c = catOf(btn.closest('li').dataset.id);
+  if (btn.dataset.act === 'color') {
+    c.color = PALETTE[(PALETTE.indexOf(c.color) + 1) % PALETTE.length];
+  } else if (btn.dataset.act === 'kind') {
+    c.kind = c.kind === 'break' ? 'work' : 'break';
+  } else if (btn.dataset.act === 'rm') {
+    if (!btn.classList.contains('armed')) { // two-step delete
+      btn.classList.add('armed');
+      btn.textContent = 'Löschen?';
+      catsMsg(hasEntries(c.id) ? `Die Einträge von „${c.name}“ bleiben erhalten.` : '');
+      return;
+    }
+    if (hasEntries(c.id)) c.hidden = true;
+    else state.cats.splice(state.cats.indexOf(c), 1);
+    catsMsg(`„${c.name}“ gelöscht.`);
+  }
+  commit();
+  renderCatList();
+});
+catList.addEventListener('change', ev => {
+  if (ev.target.tagName !== 'INPUT') return;
+  const c = catOf(ev.target.closest('li').dataset.id), name = ev.target.value.trim();
+  if (name) { c.name = name; commit(); }
+  else ev.target.value = c.name;
+});
+$('addForm').addEventListener('submit', ev => {
+  ev.preventDefault();
+  const name = $('newCat').value.trim();
+  if (!name) return;
+  const same = state.cats.find(c => c.name.toLowerCase() === name.toLowerCase());
+  if (same && !same.hidden) return catsMsg(`„${same.name}“ gibt es schon.`);
+  if (same) { same.hidden = false; catsMsg(`„${same.name}“ ist wieder da, mit den alten Einträgen.`); }
+  else {
+    const used = new Set(visibleCats().map(c => c.color));
+    state.cats.push({ id: 'c' + Date.now().toString(36), name, kind: 'work',
+                      color: PALETTE.find(p => !used.has(p)) ?? PALETTE[state.cats.length % PALETTE.length] });
+    catsMsg('');
+  }
+  $('newCat').value = '';
+  commit();
+  renderCatList();
+});
+$('manage').addEventListener('click', openCatsDlg);
+$('catsDone').addEventListener('click', () => {
+  document.activeElement?.blur(); // commits a name still being edited
+  catsDlg.close();
+});
+
+// ---- views ----
+let view = 'record';
+function showView() {
+  view = location.hash === '#timeline' ? 'timeline' : 'record';
+  for (const b of document.querySelectorAll('.seg.nav button')) b.classList.toggle('on', b.dataset.view === view);
+  $('viewRecord').hidden = view !== 'record';
+  $('viewTimeline').hidden = view !== 'timeline';
+  if (view === 'timeline') { tlDay = startOfDay(Date.now()); renderTimeline(); fitZoom(); }
+}
+for (const b of document.querySelectorAll('.seg.nav button')) {
+  b.addEventListener('click', () => { location.hash = b.dataset.view === 'timeline' ? 'timeline' : ''; });
+}
+window.addEventListener('hashchange', showView);
+
+// ---- timeline ----
+const H = 3600e3, tlScroll = $('tlScroll'), tlEl = $('tl');
+let tlDay = startOfDay(Date.now()), pxPerHour = 60, tlRange = null, tlLive = null, tlMinute = null;
+
+// Visible window of the day: whole hours around the entries, at least 07–19 when empty
+function dayRange(day0) {
+  const now = Date.now(), day1 = nextDay(day0);
+  let lo = Infinity, hi = -Infinity;
+  for (const e of timeline()) {
+    const s = Math.max(e.start, day0), en = Math.min(e.end ?? now, day1);
+    if (en <= s) continue;
+    lo = Math.min(lo, s); hi = Math.max(hi, en);
+  }
+  if (day0 <= now && now < day1 && lo !== Infinity) hi = Math.max(hi, now);
+  if (lo === Infinity) return { start: day0 + 7 * H, end: day0 + 19 * H, empty: true };
+  const floorH = t => { const d = new Date(t); d.setMinutes(0, 0, 0); return d.getTime(); };
+  // whole hours with at least 30 min of air on both ends
+  let start = floorH(lo), end = floorH(hi) + H;
+  if (lo - start < H / 2) start -= H;
+  if (end - hi < H / 2) end += H;
+  return { start: Math.max(day0, start), end: Math.min(day1, end), empty: false };
+}
+const yOf = t => (t - tlRange.start) / H * pxPerHour;
+
+function renderTimeline() {
+  const day0 = tlDay, day1 = nextDay(day0), now = Date.now();
+  tlRange = dayRange(day0);
+  $('dayTitle').textContent = dayLabel(day0) === 'Heute' || dayLabel(day0) === 'Gestern'
+    ? `${dayLabel(day0)}, ${new Date(day0).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' })}`
+    : dayLabel(day0);
+  $('dayNext').disabled = day1 > now;
+
+  const t = dayTotals(day0);
+  $('tlLegend').innerHTML = state.cats.filter(c => !c.hidden || t[c.id])
+    .map(c => `<span style="--c:${c.color}"><i></i>${esc(c.name)} <b>${fmtDur(t[c.id] ?? 0, false)}</b></span>`).join('')
+    + `<span>Arbeit <b>${fmtDur(sumKind(t, 'work'), false)}</b> · Pause <b>${fmtDur(sumKind(t, 'break'), false)}</b></span>`;
+
+  // grid: finer lines when zoomed in
+  const step = pxPerHour >= 240 ? 15 : pxPerHour >= 120 ? 30 : 60;
+  let html = '';
+  for (let g = tlRange.start; g <= tlRange.end; g += step * 60000) {
+    const minor = new Date(g).getMinutes() !== 0, y = yOf(g);
+    html += `<div class="grid-line${minor ? ' minor' : ''}" style="top:${y}px"></div>`;
+    if (!minor || pxPerHour >= 120) html += `<div class="hour${minor ? ' minor' : ''}" style="top:${y}px">${fmtClock(g)}</div>`;
+  }
+  // blocks
+  const rows = state.entries.map((e, i) => ({ e, idx: String(i) })).filter(r => !isAdj(r.e));
+  if (state.active) rows.push({ e: state.active, idx: 'active' });
+  tlLive = null;
+  for (const { e, idx } of rows) {
+    const end = e.end ?? now, s = Math.max(e.start, day0), en = Math.min(end, day1);
+    if (en <= s) continue;
+    const h = yOf(en) - yOf(s), c = catOf(e.cat);
+    const times = `${fmtClock(e.start)}–${e.end ? fmtClock(e.end) : 'jetzt'}`;
+    const label = h >= 34 ? `<b>${esc(c.name)}</b><br><span class="t">${times} · ${fmtDur(end - e.start, false)}</span>`
+                : h >= 17 ? `<b>${esc(c.name)}</b> <span class="t">${fmtDur(end - e.start, false)}</span>` : '';
+    html += `<div class="blk${e.end ? '' : ' running'}" data-idx="${idx}" style="--c:${c.color};top:${yOf(s)}px;height:${h}px"
+               title="${esc(c.name)} ${times} (${fmtDur(end - e.start, false)})">${label}</div>`;
+  }
+  const isToday = day0 <= now && now < day1;
+  if (isToday && now >= tlRange.start && now <= tlRange.end) html += `<div class="now" style="top:${yOf(now)}px"></div>`;
+  tlEl.innerHTML = html;
+  tlEl.style.height = `${yOf(tlRange.end)}px`;
+  tlScroll.querySelector('.tl-empty')?.remove();
+  if (tlRange.empty) tlScroll.insertAdjacentHTML('beforeend', '<div class="tl-empty">Keine Einträge an diesem Tag</div>');
+  if (isToday) tlLive = { blk: tlEl.querySelector('.blk.running'), now: tlEl.querySelector('.now') };
+  tlMinute = Math.floor(now / 60000);
+
+  const adj = state.entries.map((e, i) => ({ e, i })).filter(({ e }) => isAdj(e) && e.at >= day0 && e.at < day1);
+  $('tlAdj').innerHTML = adj.length ? '<div><b>Korrekturen</b></div>' + adj.map(({ e, i }) =>
+    `<div data-idx="${i}">${esc(catName(e))} ${fmtSigned(e.adj)} (um ${fmtClock(e.at)})</div>`).join('') : '';
+}
+// Each second: grow the running block and move the now line; full redraw once a minute
+function tickTimeline() {
+  if (!tlLive) return;
+  const now = Date.now();
+  if (Math.floor(now / 60000) !== tlMinute || now > tlRange.end) return renderTimeline();
+  if (tlLive.now) tlLive.now.style.top = `${yOf(now)}px`;
+  if (tlLive.blk) tlLive.blk.style.height = `${yOf(now) - parseFloat(tlLive.blk.style.top)}px`;
+}
+
+// Zoom keeps the time under the anchor point (finger / cursor / centre) in place
+const ZMIN = 20, ZMAX = 1500;
+function setZoom(px, anchorY = tlScroll.clientHeight / 2) {
+  px = Math.min(ZMAX, Math.max(ZMIN, px));
+  const tlTop = tlEl.offsetTop;
+  const hours = (tlScroll.scrollTop + anchorY - tlTop) / pxPerHour;
+  pxPerHour = px;
+  renderTimeline();
+  tlScroll.scrollTop = hours * pxPerHour - anchorY + tlTop;
+}
+function fitZoom() {
+  pxPerHour = Math.min(ZMAX, Math.max(ZMIN, (tlScroll.clientHeight - 24) / ((tlRange.end - tlRange.start) / H)));
+  renderTimeline();
+  tlScroll.scrollTop = 0;
+}
+$('zoomIn').addEventListener('click', () => setZoom(pxPerHour * 1.5));
+$('zoomOut').addEventListener('click', () => setZoom(pxPerHour / 1.5));
+$('zoomFit').addEventListener('click', fitZoom);
+// trackpad pinch / ctrl + wheel
+tlScroll.addEventListener('wheel', ev => {
+  if (!ev.ctrlKey) return;
+  ev.preventDefault();
+  setZoom(pxPerHour * Math.exp(-ev.deltaY * 0.01), ev.clientY - tlScroll.getBoundingClientRect().top);
+}, { passive: false });
+// two-finger pinch
+let pinch = null;
+const touchDist = ts => Math.hypot(ts[0].clientX - ts[1].clientX, ts[0].clientY - ts[1].clientY);
+tlScroll.addEventListener('touchstart', ev => {
+  if (ev.touches.length === 2) pinch = { d0: touchDist(ev.touches), px0: pxPerHour };
+}, { passive: true });
+tlScroll.addEventListener('touchmove', ev => {
+  if (!pinch || ev.touches.length !== 2) return;
+  ev.preventDefault();
+  const midY = (ev.touches[0].clientY + ev.touches[1].clientY) / 2 - tlScroll.getBoundingClientRect().top;
+  setZoom(pinch.px0 * touchDist(ev.touches) / pinch.d0, midY);
+}, { passive: false });
+tlScroll.addEventListener('touchend', ev => { if (ev.touches.length < 2) pinch = null; });
+// keep iOS from zooming the whole page while pinching the timeline
+tlScroll.addEventListener('gesturestart', ev => ev.preventDefault());
+
+const shiftDay = n => { const d = new Date(tlDay); d.setDate(d.getDate() + n); tlDay = d.getTime(); renderTimeline(); fitZoom(); };
+$('dayPrev').addEventListener('click', () => shiftDay(-1));
+$('dayNext').addEventListener('click', () => shiftDay(1));
+// tap a block or correction to edit it
+for (const el of [tlEl, $('tlAdj')]) {
+  el.addEventListener('click', ev => { const b = ev.target.closest('[data-idx]'); if (b) openEntryDlg(b.dataset.idx); });
+}
+
+$('stop').addEventListener('click', () => switchTo(null));
+$('csv').addEventListener('click', downloadCsv);
+
+// Times are derived from timestamps, so the display catches up after the phone slept
+setInterval(() => { tick(); if (catDlg.open) updateCatDlg(); }, 1000);
+document.addEventListener('visibilitychange', render);
+showView();
+render();
+
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
+// Ask the browser not to evict our data when storage runs low (granted silently or not at all)
+navigator.storage?.persist?.().catch(() => {});
+</script>
+</body>
+</html>
