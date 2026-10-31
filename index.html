@@ -121,6 +121,19 @@
   #catList .rm.armed { flex-basis: 84px; background: var(--danger); color: #fff; font-size: 13px; }
   #catList .rm:disabled { opacity: .3; }
   .add { display: flex; gap: 8px; }
+
+  .sync-line {
+    display: flex; align-items: center; gap: 8px; width: 100%; margin-top: 10px; padding: 10px 12px;
+    background: transparent; border: 1px solid var(--line); border-radius: 12px; color: var(--muted);
+    font: inherit; font-size: 13px; text-align: left; cursor: pointer;
+  }
+  .sync-line .st { flex: 1; }
+  .sync-line.warn { color: #f0a430; border-color: color-mix(in srgb, #f0a430 40%, var(--line)); }
+  .sync-line.err { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, var(--line)); }
+  .links { display: flex; flex-wrap: wrap; gap: 6px 16px; justify-content: center; margin-top: 14px; font-size: 14px; }
+  .links a, .links button { color: var(--muted); background: none; border: 0; padding: 4px 0; font: inherit; cursor: pointer; text-decoration: underline; }
+  .links .armed { color: var(--danger); }
+  #syncConflict .btn { margin-bottom: 8px; width: 100%; }
   .add input { flex: 1; font-size: 16px; text-align: left; padding: 8px 10px; }
   .add .btn { flex: 0 0 48px; padding: 8px 0; font-size: 20px; line-height: 1; }
 
@@ -179,6 +192,7 @@
   <button class="btn" id="csv">CSV</button>
   <button class="btn" id="manage">Kategorien</button>
 </div>
+<button class="sync-line" id="syncLine" hidden><span>☁</span><span class="st" id="syncStatus"></span><span>›</span></button>
 
 <h2>Einträge</h2>
 <p id="empty">Noch nichts erfasst. Tippe auf eine Kategorie zum Starten.</p>
@@ -237,6 +251,27 @@
   <div class="bar">
     <button class="btn" id="catCancel">Abbrechen</button>
     <button class="btn apply" id="catApply">Übernehmen</button>
+  </div>
+</dialog>
+
+<!-- Google Sheets sync -->
+<dialog id="syncDlg">
+  <h3>Google Sheet</h3>
+  <p class="sub" id="syncInfo"></p>
+  <div id="syncConflict" hidden>
+    <p class="sub" id="conflictText"></p>
+    <button class="btn" id="conflictPull">Daten aus dem Sheet hierher laden</button>
+    <button class="btn" id="conflictPush">Daten von diesem Gerät hochladen</button>
+  </div>
+  <p class="msg" id="syncMsg"></p>
+  <div class="bar">
+    <button class="btn" id="syncClose">Schließen</button>
+    <button class="btn apply" id="syncGo">Jetzt synchronisieren</button>
+  </div>
+  <div class="links">
+    <a id="syncOpen" target="_blank" rel="noopener" hidden>Sheet öffnen</a>
+    <button id="syncRestore" hidden>Aus Sheet wiederherstellen</button>
+    <button id="syncDisconnect" hidden>Trennen</button>
   </div>
 </dialog>
 
@@ -487,25 +522,35 @@ function tick() {
 
 function render() { buildTiles(); renderLog(); tick(); if (view === 'timeline') renderTimeline(); }
 
-// ---- CSV ----
-function downloadCsv() {
+// ---- export table (CSV and Google Sheet) ----
+// Header + one row per entry, chronological. The running entry is either cut off
+// at "now" (CSV) or listed as still running with an empty end (sheet).
+function tableRows({ runningOpen = false } = {}) {
+  const now = Date.now();
   const rows = state.entries.map(e => ({ ...e }));
-  if (state.active) rows.push({ ...state.active, end: Date.now() }); // running entry ends "now"
+  if (state.active) rows.push({ ...state.active, end: runningOpen ? null : now });
   const key = e => isAdj(e) ? e.at : e.start;
   rows.sort((a, b) => key(a) - key(b));
-  // quote fields containing separators (category names are free text)
-  const field = v => /[;"\r\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : v;
   const kind = e => catOf(e.cat).kind === 'break' ? 'Pause' : 'Arbeit';
-  const lines = [['Kategorie', 'Datum', 'Start', 'Ende', 'Dauer (h:mm:ss)', 'Dauer (min)', 'Typ', 'Art'].join(';')];
+  const out = [['Kategorie', 'Datum', 'Start', 'Ende', 'Dauer (h:mm:ss)', 'Dauer (min)', 'Typ', 'Art']];
   for (const e of rows) {
-    lines.push((isAdj(e)
+    const end = e.end ?? now;
+    out.push(isAdj(e)
       ? [catName(e), fmtDate(e.at), '', '', (e.adj < 0 ? '-' : '') + fmtDur(Math.abs(e.adj)),
          Math.round(e.adj / 60000), 'Korrektur', kind(e)]
-      : [catName(e), fmtDate(e.start), fmtClockSec(e.start), fmtClockSec(e.end),
-         fmtDur(e.end - e.start), Math.round((e.end - e.start) / 60000), 'Zeit', kind(e)]).map(field).join(';'));
+      : [catName(e), fmtDate(e.start), fmtClockSec(e.start), e.end ? fmtClockSec(e.end) : '',
+         fmtDur(end - e.start), Math.round((end - e.start) / 60000), e.end ? 'Zeit' : 'läuft', kind(e)]);
   }
-  const first = rows.length ? fmtDate(key(rows[0])) : fmtDate(Date.now());
-  const last = rows.length ? fmtDate(key(rows.at(-1))) : first;
+  return out;
+}
+
+function downloadCsv() {
+  const rows = tableRows();
+  // quote fields containing separators (category names are free text)
+  const field = v => /[;"\r\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : v;
+  const lines = rows.map(r => r.map(field).join(';'));
+  const first = rows.length > 1 ? rows[1][1] : fmtDate(Date.now());
+  const last = rows.length > 1 ? rows.at(-1)[1] : first;
   // BOM so Excel opens umlauts correctly
   const blob = new Blob(['﻿' + lines.join('\r\n') + '\r\n'], { type: 'text/csv;charset=utf-8' });
   const a = document.createElement('a');
@@ -732,6 +777,216 @@ $('catsDone').addEventListener('click', () => {
   catsDlg.close();
 });
 
+// ---- Google Sheets sync ----
+// The phone stays the source of truth; the sheet is a mirror that is fully rewritten on
+// every sync. A hidden tab keeps the raw app data so another device can restore from it.
+const GOOGLE_CLIENT_ID = '1019469281637-cvr48b89o8j5umaeoai43fdbps938nm6.apps.googleusercontent.com'; // OAuth client ID (type "Web") from the Google Cloud Console
+const SCOPE = 'https://www.googleapis.com/auth/drive.file'; // only files this app created
+const SHEET_TITLE = 'Arbeitszeit (custom-timer)', TAB = 'Einträge', DATA_TAB = '_app-daten';
+const SHEETS = 'https://sheets.googleapis.com/v4/spreadsheets';
+const SYNC_KEY = 'worktimer.sync';
+
+// { deviceId, sheetId, lastSync, token, tokenExp, error, conflict }
+let sync = (() => { try { return JSON.parse(localStorage.getItem(SYNC_KEY)) ?? {}; } catch { return {}; } })();
+const saveSync = () => { try { localStorage.setItem(SYNC_KEY, JSON.stringify(sync)); } catch {} };
+if (!sync.deviceId) { sync.deviceId = crypto.randomUUID(); saveSync(); }
+
+const hasToken = () => !!sync.token && sync.tokenExp > Date.now();
+let tokenClient = null, afterToken = null, syncing = false;
+
+// Google's sign-in script; loaded in the background so a tap can open the login popup directly
+function loadGis() {
+  if (!GOOGLE_CLIENT_ID || tokenClient || !navigator.onLine || $('gis')) return;
+  const el = document.createElement('script');
+  el.id = 'gis';
+  el.src = 'https://accounts.google.com/gsi/client';
+  el.async = true;
+  el.onload = () => {
+    tokenClient = google.accounts.oauth2.initTokenClient({
+      client_id: GOOGLE_CLIENT_ID, scope: SCOPE,
+      callback: resp => {
+        if (resp.error) return syncFail(`Anmeldung fehlgeschlagen (${resp.error}).`);
+        sync.token = resp.access_token;
+        sync.tokenExp = Date.now() + (Number(resp.expires_in) - 60) * 1000;
+        saveSync();
+        const next = afterToken; afterToken = null; next?.();
+      },
+      error_callback: err => {
+        afterToken = null;
+        syncFail(err.type === 'popup_closed' ? 'Anmeldung abgebrochen.'
+          : err.type === 'popup_failed_to_open' ? 'Das Anmeldefenster wurde blockiert. Bitte Popups für diese Seite erlauben und nochmal tippen.'
+          : `Anmeldung fehlgeschlagen (${err.type}).`);
+      },
+    });
+  };
+  el.onerror = () => el.remove(); // offline; retried on 'online'
+  document.head.appendChild(el);
+}
+window.addEventListener('online', loadGis);
+
+// Must run inside a tap handler: the login popup is only allowed after a user gesture
+function withToken(action) {
+  if (hasToken()) return action();
+  if (!tokenClient) return syncFail(navigator.onLine ? 'Google-Anmeldung lädt noch, bitte gleich nochmal tippen.' : 'Keine Internetverbindung.');
+  afterToken = action;
+  tokenClient.requestAccessToken({ prompt: '' });
+}
+
+async function api(url, opts = {}, { allow404 = false } = {}) {
+  const res = await fetch(url, { ...opts, headers: { Authorization: `Bearer ${sync.token}`, 'Content-Type': 'application/json' } });
+  if (res.status === 401) { sync.token = null; saveSync(); throw new Error('Anmeldung abgelaufen, bitte nochmal synchronisieren.'); }
+  if (allow404 && res.status === 404) return null;
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error?.message || `Google meldet Fehler ${res.status}.`);
+  return body;
+}
+const range = (tab, cell = '') => encodeURIComponent(`'${tab}'${cell}`);
+
+// Find or create the spreadsheet (with both tabs)
+async function ensureSheet() {
+  if (!sync.sheetId) {
+    // created earlier, e.g. on another device? drive.file only lists this app's own files
+    const q = encodeURIComponent(`name='${SHEET_TITLE}' and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false`);
+    const found = await api(`https://www.googleapis.com/drive/v3/files?q=${q}&orderBy=modifiedTime desc&fields=files(id)`);
+    sync.sheetId = found.files?.[0]?.id ?? null;
+  }
+  if (!sync.sheetId) {
+    const created = await api(SHEETS, { method: 'POST', body: JSON.stringify({
+      properties: { title: SHEET_TITLE },
+      sheets: [{ properties: { title: TAB } }, { properties: { title: DATA_TAB, hidden: true } }],
+    }) });
+    sync.sheetId = created.spreadsheetId;
+    saveSync();
+    return;
+  }
+  const meta = await api(`${SHEETS}/${sync.sheetId}?fields=sheets.properties.title`, {}, { allow404: true });
+  if (!meta) { sync.sheetId = null; return ensureSheet(); } // deleted in Drive
+  saveSync();
+  const titles = meta.sheets.map(t => t.properties.title);
+  const missing = [TAB, DATA_TAB].filter(t => !titles.includes(t));
+  if (missing.length) {
+    await api(`${SHEETS}/${sync.sheetId}:batchUpdate`, { method: 'POST', body: JSON.stringify({
+      requests: missing.map(title => ({ addSheet: { properties: { title, hidden: title === DATA_TAB } } })),
+    }) });
+  }
+}
+
+async function readRemote() {
+  const r = await api(`${SHEETS}/${sync.sheetId}/values/${range(DATA_TAB, '!A:A')}`);
+  const json = (r.values ?? []).map(row => row[0] ?? '').join('');
+  if (!json) return null;
+  try { const d = JSON.parse(json); return Array.isArray(d.state?.entries) && Array.isArray(d.state?.cats) ? d : null; }
+  catch { return null; }
+}
+
+async function writeRemote() {
+  const json = JSON.stringify({ app: 'custom-timer', v: 1, deviceId: sync.deviceId, updatedAt: Date.now(), state });
+  const chunks = json.match(/[\s\S]{1,40000}/g); // a cell holds at most 50 000 characters
+  const id = sync.sheetId;
+  await api(`${SHEETS}/${id}/values:batchClear`, { method: 'POST', body: JSON.stringify({ ranges: [`'${TAB}'`, `'${DATA_TAB}'`] }) });
+  // append (unlike update) grows the grid when there are more rows than the sheet has
+  const append = (tab, values) => api(`${SHEETS}/${id}/values/${range(tab, '!A1')}:append?valueInputOption=RAW`,
+                                      { method: 'POST', body: JSON.stringify({ values }) });
+  await append(TAB, tableRows({ runningOpen: true }));
+  await append(DATA_TAB, chunks.map(c => [c]));
+}
+
+// Only runs on a tap. mode: 'auto' (never overwrites another device's data), 'push' (overwrite), 'pull' (restore)
+async function runSync(mode = 'auto') {
+  if (syncing) return;
+  syncing = true;
+  sync.error = null;
+  updateSyncUi('Synchronisiere …');
+  try {
+    await ensureSheet();
+    const remote = await readRemote();
+    if (mode === 'pull') {
+      if (!remote) throw new Error('Im Sheet sind noch keine App-Daten.');
+      state = remote.state;
+      save();
+      render();
+    } else {
+      // someone else wrote since our last sync: don't overwrite silently
+      if (mode === 'auto' && remote && remote.deviceId !== sync.deviceId && remote.updatedAt > (sync.lastSync ?? 0)) {
+        sync.conflict = { updatedAt: remote.updatedAt, entries: remote.state.entries.length };
+        saveSync();
+        return;
+      }
+      await writeRemote();
+    }
+    sync.conflict = null;
+    sync.lastSync = Date.now();
+    saveSync();
+  } catch (err) {
+    syncFail(err.message || String(err));
+  } finally {
+    syncing = false;
+    updateSyncUi();
+  }
+}
+function syncFail(msg) { sync.error = msg; saveSync(); updateSyncUi(); }
+
+function fmtWhen(ts) {
+  const label = dayLabel(ts);
+  return `${label === 'Heute' || label === 'Gestern' ? label.toLowerCase() : label} ${fmtClock(ts)}`;
+}
+function updateSyncUi(busy) {
+  $('syncLine').hidden = !GOOGLE_CLIENT_ID;
+  let line, cls = '';
+  if (busy) line = busy;
+  else if (sync.conflict) { line = 'Sheet enthält Daten eines anderen Geräts – antippen'; cls = 'warn'; }
+  else if (sync.error) { line = `Sync fehlgeschlagen – antippen`; cls = 'err'; }
+  else if (!sync.lastSync) line = 'Mit Google Sheet synchronisieren';
+  else {
+    line = `Google Sheet: zuletzt ${fmtWhen(sync.lastSync)}`;
+    if (Date.now() - sync.lastSync > 24 * 3600e3) cls = 'warn';
+  }
+  $('syncStatus').textContent = line;
+  $('syncLine').className = `sync-line ${cls}`;
+
+  if (!$('syncDlg').open) return;
+  $('syncInfo').textContent = !sync.sheetId
+    ? 'Deine Zeiten werden in eine Tabelle in deinem Google Drive gespiegelt. Die App sieht nur Dateien, die sie selbst angelegt hat.'
+    : 'Das Sheet ist eine Kopie: Es wird nur aktualisiert, wenn du hier synchronisierst, und Änderungen direkt im Sheet werden dabei überschrieben.';
+  $('syncConflict').hidden = !sync.conflict;
+  if (sync.conflict) $('conflictText').textContent = `Im Sheet liegen Daten von einem anderen Gerät (Stand ${fmtWhen(sync.conflict.updatedAt)}, ${sync.conflict.entries} Einträge). Welche sollen gelten?`;
+  $('syncMsg').textContent = busy || sync.error || (sync.lastSync ? `Zuletzt synchronisiert: ${fmtWhen(sync.lastSync)}` : '');
+  $('syncMsg').classList.toggle('err', !busy && !!sync.error);
+  $('syncGo').disabled = !!busy || !!sync.conflict;
+  $('syncGo').textContent = sync.sheetId ? 'Jetzt synchronisieren' : 'Anmelden & synchronisieren';
+  $('syncOpen').hidden = !sync.sheetId;
+  if (sync.sheetId) $('syncOpen').href = `https://docs.google.com/spreadsheets/d/${sync.sheetId}/edit`;
+  $('syncRestore').hidden = $('syncDisconnect').hidden = !sync.sheetId;
+}
+
+const syncDlg = $('syncDlg');
+$('syncLine').addEventListener('click', () => {
+  if (document.querySelector('dialog[open]')) return;
+  for (const b of [$('syncRestore'), $('conflictPull'), $('conflictPush')]) b.classList.remove('armed');
+  $('syncRestore').textContent = 'Aus Sheet wiederherstellen';
+  syncDlg.showModal();
+  updateSyncUi();
+});
+$('syncClose').addEventListener('click', () => syncDlg.close());
+$('syncGo').addEventListener('click', () => withToken(() => runSync('auto')));
+$('conflictPull').addEventListener('click', () => withToken(() => runSync('pull')));
+$('conflictPush').addEventListener('click', () => withToken(() => runSync('push')));
+$('syncRestore').addEventListener('click', ev => {
+  const b = ev.currentTarget;
+  if (!b.classList.contains('armed')) { // two-step: replaces everything on this device
+    b.classList.add('armed');
+    b.textContent = 'Daten hier ersetzen?';
+    return;
+  }
+  withToken(() => runSync('pull'));
+});
+$('syncDisconnect').addEventListener('click', () => {
+  if (sync.token) window.google?.accounts?.oauth2?.revoke(sync.token, () => {});
+  sync = { deviceId: sync.deviceId };
+  saveSync();
+  updateSyncUi();
+});
+
 // ---- views ----
 let view = 'record';
 function showView() {
@@ -887,6 +1142,8 @@ render();
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 // Ask the browser not to evict our data when storage runs low (granted silently or not at all)
 navigator.storage?.persist?.().catch(() => {});
+loadGis();
+updateSyncUi();
 </script>
 </body>
 </html>

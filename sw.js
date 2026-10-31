@@ -1,5 +1,5 @@
 // Bump the version whenever index.html changes, so phones pick up the new version.
-const CACHE = 'worktimer-v7';
+const CACHE = 'worktimer-v9';
 const FILES = ['./', './index.html', './manifest.webmanifest', './icon-180.png', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', e => {
@@ -18,7 +18,8 @@ self.addEventListener('activate', e => {
 
 // Cache first: works fully offline; updates arrive via a new CACHE version.
 self.addEventListener('fetch', e => {
-  if (e.request.method !== 'GET') return;
+  // only our own files; Google sign-in and API calls go straight to the network
+  if (e.request.method !== 'GET' || new URL(e.request.url).origin !== location.origin) return;
   e.respondWith(
     caches.match(e.request, { ignoreSearch: true }).then(hit => hit || fetch(e.request))
   );
