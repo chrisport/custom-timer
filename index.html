@@ -327,8 +327,12 @@ const esc = s => String(s).replace(/[&<>"']/g, ch => `&#${ch.charCodeAt(0)};`);
 // Sheet contents are external input. Validate identifiers and normalize imported state
 // before it reaches rendering or calculations.
 const safeId = id => typeof id === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(id);
+const MAX_IMPORTED_CATEGORIES = 10;
+const MAX_IMPORTED_ENTRIES = 100000;
+const MAX_IMPORTED_CORRECTION_MS = 24 * 60 * 60 * 1000;
 function normalizeImportedState(raw) {
-  if (!raw || typeof raw !== 'object' || !Array.isArray(raw.cats) || !Array.isArray(raw.entries)) return null;
+  if (!raw || typeof raw !== 'object' || !Array.isArray(raw.cats) || !Array.isArray(raw.entries)
+      || raw.cats.length > MAX_IMPORTED_CATEGORIES || raw.entries.length > MAX_IMPORTED_ENTRIES) return null;
   const cats = [], ids = new Set();
   for (const c of raw.cats) {
     if (!c || !safeId(c.id) || ids.has(c.id) || typeof c.name !== 'string') return null;
@@ -342,7 +346,7 @@ function normalizeImportedState(raw) {
   for (const e of raw.entries) {
     if (!e || !safeId(e.cat)) return null;
     if (e.adj != null) {
-      if (!Number.isFinite(e.adj) || !validTime(e.at)) return null;
+      if (!Number.isFinite(e.adj) || Math.abs(e.adj) > MAX_IMPORTED_CORRECTION_MS || !validTime(e.at)) return null;
       entries.push({ cat: e.cat, adj: e.adj, at: e.at });
     } else {
       if (!validTime(e.start) || (e.end != null && (!validTime(e.end) || e.end < e.start))) return null;
@@ -570,20 +574,20 @@ function render() { buildTiles(); renderLog(); tick(); if (view === 'timeline') 
 // ---- table for the "Einträge" tab of the Google Sheet ----
 // Header + one row per entry, chronological; the running entry is listed with an empty end.
 function tableRows() {
-  const now = Date.now();
   const rows = state.entries.map(e => ({ ...e }));
   if (state.active) rows.push({ ...state.active });
   const key = e => isAdj(e) ? e.at : e.start;
   rows.sort((a, b) => key(a) - key(b));
   const kind = e => catOf(e.cat).kind === 'break' ? 'Pause' : 'Arbeit';
-  const out = [['Kategorie', 'Datum', 'Start', 'Ende', 'Dauer (h:mm:ss)', 'Dauer (min)', 'Typ', 'Art']];
-  for (const e of rows) {
-    const end = e.end ?? now;
+  const out = [['Kategorie', 'Datum', 'Start', 'Ende', 'Dauer (h:mm:ss)', 'Dauer (min)', 'Typ', 'Art', 'Start (Unix ms)', 'Ende (Unix ms)', 'Korrektur (min)']];
+  for (let i = 0; i < rows.length; i++) {
+    const e = rows[i], row = i + 2;
+    const duration = `=IF(G${row}="Korrektur",IF(F${row}<0,"-","")&TEXT(ABS(F${row})/1440,"[h]:mm:ss"),TEXT(F${row}/1440,"[h]:mm:ss"))`;
+    const minutes = `=IF(G${row}="Korrektur",K${row},ROUND((IF(J${row}="",(NOW()-DATE(1970,1,1))*86400000,J${row})-I${row})/60000,0))`;
     out.push(isAdj(e)
-      ? [catName(e), fmtDate(e.at), '', '', (e.adj < 0 ? '-' : '') + fmtDur(Math.abs(e.adj)),
-         Math.round(e.adj / 60000), 'Korrektur', kind(e)]
+      ? [catName(e), fmtDate(e.at), '', '', duration, minutes, 'Korrektur', kind(e), '', '', Math.round(e.adj / 60000)]
       : [catName(e), fmtDate(e.start), fmtClockSec(e.start), e.end ? fmtClockSec(e.end) : '',
-         fmtDur(end - e.start), Math.round((end - e.start) / 60000), e.end ? 'Zeit' : 'läuft', kind(e)]);
+         duration, minutes, e.end ? 'Zeit' : 'läuft', kind(e), e.start, e.end ?? '', '']);
   }
   return out;
 }
@@ -1013,7 +1017,7 @@ async function writeRemote() {
     return api(`${SHEETS}/${id}/values/${range(tab, '!A1')}:append?valueInputOption=${formulas ? 'USER_ENTERED' : 'RAW'}`,
       { method: 'POST', body: JSON.stringify({ values: safe }) });
   };
-  await append(TAB, tableRows());
+  await append(TAB, tableRows(), true);
   const { totals, daily } = statsRows();
   await append(DAILY_TAB, daily, true);
   await append(TOTALS_TAB, totals, true);
