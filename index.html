@@ -940,25 +940,43 @@ const fmtHM = ms => (ms < 0 ? '-' : '') + fmtDur(Math.abs(ms), false);
 
 // Returns the rows for the "Summen" and "Pro Tag" tabs
 function statsRows() {
-  const days = dailyTotals(), total = {};
-  for (const { t } of days) for (const [cat, ms] of Object.entries(t)) total[cat] = (total[cat] ?? 0) + ms;
-  const cats = state.cats.filter(c => !c.hidden || total[c.id]);
+  const days = dailyTotals();
+  const cats = state.cats.filter(c => !c.hidden || state.entries.some(e => e.cat === c.id) || state.active?.cat === c.id);
   const kindName = c => c.kind === 'break' ? 'Pause' : 'Arbeit';
-  const work = sumKind(total, 'work'), brk = sumKind(total, 'break');
+  const col = n => { let s = ''; for (n++; n; n = Math.floor((n - 1) / 26)) s = String.fromCharCode(65 + (n - 1) % 26) + s; return s; };
+  const catCols = cats.map((_, i) => col(i + 2));
+  const workCols = cats.filter(c => c.kind === 'work').map(c => catCols[cats.indexOf(c)]);
+  const breakCols = cats.filter(c => c.kind === 'break').map(c => catCols[cats.indexOf(c)]);
   const totals = [
     ['Kategorie', 'Art', 'Stunden', 'Dauer (h:mm)'],
-    ...cats.map(c => [c.name, kindName(c), hours(total[c.id] ?? 0), fmtHM(total[c.id] ?? 0)]),
+    ...cats.map((c, i) => [c.name, kindName(c), `=SUMIF('${TAB}'!$A:$A,A${i + 2},'${TAB}'!$F:$F)/60`, `=TEXT(C${i + 2}/24,"[h]:mm")`]),
     [],
-    ['Summe Arbeit', 'Arbeit', hours(work), fmtHM(work)],
-    ['Summe Pause', 'Pause', hours(brk), fmtHM(brk)],
+    ['Summe Arbeit', 'Arbeit', `=${workCols.map(x => `SUM(C${cats.findIndex(c => catCols[cats.indexOf(c)] === x) + 2})`).join('+') || '0'}`, `=TEXT(C${cats.length + 3}/24,"[h]:mm")`],
+    ['Summe Pause', 'Pause', `=${breakCols.map(x => `SUM(C${cats.findIndex(c => catCols[cats.indexOf(c)] === x) + 2})`).join('+') || '0'}`, `=TEXT(C${cats.length + 4}/24,"[h]:mm")`],
   ];
-  const daily = [
-    ['Datum', 'Tag', ...cats.map(c => c.name), 'Summe Arbeit', 'Summe Pause'],
-    ...days.map(({ day0, t }) => [
-      fmtDate(day0), new Date(day0).toLocaleDateString('de-DE', { weekday: 'short' }),
-      ...cats.map(c => hours(t[c.id] ?? 0)), hours(sumKind(t, 'work')), hours(sumKind(t, 'break')),
-    ]),
-  ];
+  const daily = [['Datum', 'Tag', ...cats.map(c => c.name), 'Summe Arbeit', 'Summe Pause']];
+  let weekRows = [];
+  const addWeek = () => {
+    if (!weekRows.length) return;
+    const first = weekRows[0], last = weekRows.at(-1), row = daily.length + 1;
+    const vals = [`Woche ${fmtDate(first.day0)}–${fmtDate(last.day0)}`, 'Woche'];
+    for (let i = 0; i < cats.length; i++) vals.push(`=SUM(${catCols[i]}${first.row}:${catCols[i]}${last.row})`);
+    vals.push(`=SUM(${workCols.map(x => `${x}${first.row}:${x}${last.row}`).join(',') || '0'})`);
+    vals.push(`=SUM(${breakCols.map(x => `${x}${first.row}:${x}${last.row}`).join(',') || '0'})`);
+    daily.push(vals); weekRows = [];
+  };
+  for (const { day0 } of days) {
+    const weekStart = new Date(day0); weekStart.setDate(weekStart.getDate() - ((weekStart.getDay() + 6) % 7));
+    const currentWeek = weekStart.getTime();
+    if (weekRows.length && weekRows[0].week !== currentWeek) addWeek();
+    const row = daily.length + 1, date = new Date(day0), dow = date.getDay() || 7;
+    const vals = [fmtDate(day0), date.toLocaleDateString('de-DE', { weekday: 'short' }),
+      ...cats.map((_, i) => `=SUMIFS('${TAB}'!$F:$F,'${TAB}'!$A:$A,${catCols[i]}$1,'${TAB}'!$B:$B,TEXT($A${row},"yyyy-mm-dd"))/60`),
+      `=${workCols.map(x => `${x}${row}`).join('+') || '0'}`, `=${breakCols.map(x => `${x}${row}`).join('+') || '0'}`];
+    daily.push(vals); weekRows.push({ day0, row, week: currentWeek });
+    if (dow === 7) addWeek();
+  }
+  addWeek();
   return { totals, daily };
 }
 
@@ -990,12 +1008,15 @@ async function writeRemote() {
   const id = sync.sheetId;
   await api(`${SHEETS}/${id}/values:batchClear`, { method: 'POST', body: JSON.stringify({ ranges: TABS.map(t => `'${t}'`) }) });
   // append (unlike update) grows the grid when there are more rows than the sheet has
-  const append = (tab, values) => api(`${SHEETS}/${id}/values/${range(tab, '!A1')}:append?valueInputOption=RAW`,
-                                      { method: 'POST', body: JSON.stringify({ values }) });
+  const append = (tab, values, formulas = false) => {
+    const safe = formulas ? values.map(row => row.map(v => typeof v === 'string' && !v.startsWith('=') && /^[=+@\-]/.test(v) ? `'${v}` : v)) : values;
+    return api(`${SHEETS}/${id}/values/${range(tab, '!A1')}:append?valueInputOption=${formulas ? 'USER_ENTERED' : 'RAW'}`,
+      { method: 'POST', body: JSON.stringify({ values: safe }) });
+  };
   await append(TAB, tableRows());
   const { totals, daily } = statsRows();
-  await append(DAILY_TAB, daily);
-  await append(TOTALS_TAB, totals);
+  await append(DAILY_TAB, daily, true);
+  await append(TOTALS_TAB, totals, true);
   await append(SETTINGS_TAB, settingsRows());
   await append(DATA_TAB, chunks.map(c => [c]));
 }
