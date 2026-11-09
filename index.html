@@ -324,6 +324,39 @@ const LEGACY_CATS = [
 const KEY = 'worktimer.v1';
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"']/g, ch => `&#${ch.charCodeAt(0)};`);
+// Sheet contents are external input. Validate identifiers and normalize imported state
+// before it reaches rendering or calculations.
+const safeId = id => typeof id === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(id);
+function normalizeImportedState(raw) {
+  if (!raw || typeof raw !== 'object' || !Array.isArray(raw.cats) || !Array.isArray(raw.entries)) return null;
+  const cats = [], ids = new Set();
+  for (const c of raw.cats) {
+    if (!c || !safeId(c.id) || ids.has(c.id) || typeof c.name !== 'string') return null;
+    ids.add(c.id);
+    cats.push({ id: c.id, name: c.name.slice(0, 100),
+      color: typeof c.color === 'string' && /^#[0-9a-f]{6}$/i.test(c.color) ? c.color : '#8b90a0',
+      kind: c.kind === 'break' ? 'break' : 'work', ...(c.hidden ? { hidden: true } : {}) });
+  }
+  const validTime = n => typeof n === 'number' && Number.isFinite(n) && Math.abs(n) <= 8.64e15;
+  const entries = [];
+  for (const e of raw.entries) {
+    if (!e || !safeId(e.cat)) return null;
+    if (e.adj != null) {
+      if (!Number.isFinite(e.adj) || !validTime(e.at)) return null;
+      entries.push({ cat: e.cat, adj: e.adj, at: e.at });
+    } else {
+      if (!validTime(e.start) || (e.end != null && (!validTime(e.end) || e.end < e.start))) return null;
+      entries.push({ cat: e.cat, start: e.start, ...(e.end == null ? {} : { end: e.end }) });
+    }
+  }
+  let active = null;
+  if (raw.active != null) {
+    if (!safeId(raw.active.cat) || !validTime(raw.active.start)) return null;
+    active = { cat: raw.active.cat, start: raw.active.start };
+  }
+  if ([...entries, ...(active ? [active] : [])].some(e => !ids.has(e.cat))) return null;
+  return { cats, entries, active };
+}
 
 // state: { cats: [{id, name, color, kind: 'work'|'break', hidden?}],
 //          entries: [{cat, start, end} | {cat, adj, at}], active: {cat, start} | null }
@@ -666,8 +699,9 @@ function openEntryDlg(idx) {
   $('eSave').hidden = adj;
   if (adj) $('eAdjInfo').textContent = `${catName(e)}: Korrektur ${fmtSigned(e.adj)} vom ${dayLabel(e.at)}, ${fmtClock(e.at)}.`;
   else {
-    $('eCat').innerHTML = state.cats.filter(c => !c.hidden || c.id === e.cat)
-      .map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
+    $('eCat').replaceChildren(...state.cats.filter(c => !c.hidden || c.id === e.cat).map(c => {
+      const option = document.createElement('option'); option.value = c.id; option.textContent = c.name; return option;
+    }));
     $('eCat').value = e.cat;
     eStart.value = fmtClock(e.start);
     eEnd.hidden = e.end == null;
@@ -700,16 +734,17 @@ const catsDlg = $('catsDlg'), catList = $('catList');
 const hasEntries = id => state.entries.some(e => e.cat === id) || state.active?.cat === id;
 function renderCatList() {
   const vis = visibleCats();
-  catList.innerHTML = vis.map(c => {
+  catList.replaceChildren(...vis.map(c => {
     const running = state.active?.cat === c.id;
-    return `<li data-id="${c.id}" style="--c:${c.color}">
-      <button class="swatch" data-act="color" aria-label="Farbe ändern"></button>
-      <input value="${esc(c.name)}" maxlength="30" aria-label="Name">
-      <button class="btn kind ${c.kind}" data-act="kind">${c.kind === 'break' ? 'Pause' : 'Arbeit'}</button>
-      <button class="btn rm" data-act="rm" aria-label="Löschen" ${running || vis.length === 1 ? 'disabled' : ''}
-        title="${running ? 'Läuft gerade – erst stoppen' : vis.length === 1 ? 'Mindestens eine Kategorie' : 'Löschen'}">✕</button>
-    </li>`;
-  }).join('');
+    const li = document.createElement('li'); li.dataset.id = c.id; li.style.setProperty('--c', c.color);
+    const swatch = document.createElement('button'); swatch.className = 'swatch'; swatch.dataset.act = 'color'; swatch.setAttribute('aria-label', 'Farbe ändern');
+    const input = document.createElement('input'); input.value = c.name; input.maxLength = 30; input.setAttribute('aria-label', 'Name');
+    const kind = document.createElement('button'); kind.className = `btn kind ${c.kind}`; kind.dataset.act = 'kind'; kind.textContent = c.kind === 'break' ? 'Pause' : 'Arbeit';
+    const rm = document.createElement('button'); rm.className = 'btn rm'; rm.dataset.act = 'rm'; rm.setAttribute('aria-label', 'Löschen');
+    rm.disabled = running || vis.length === 1;
+    rm.title = running ? 'Läuft gerade – erst stoppen' : vis.length === 1 ? 'Mindestens eine Kategorie' : 'Löschen'; rm.textContent = '✕';
+    li.append(swatch, input, kind, rm); return li;
+  }));
 }
 const catsMsg = t => { $('catsMsg').textContent = t; };
 function openCatsDlg() {
@@ -870,7 +905,10 @@ async function readRemote() {
   const r = await api(`${SHEETS}/${sync.sheetId}/values/${range(DATA_TAB, '!A:A')}`);
   const json = (r.values ?? []).map(row => row[0] ?? '').join('');
   if (!json) return null;
-  try { const d = JSON.parse(json); return Array.isArray(d.state?.entries) && Array.isArray(d.state?.cats) ? d : null; }
+  try {
+    const d = JSON.parse(json), imported = normalizeImportedState(d.state);
+    return imported ? { ...d, state: imported } : null;
+  }
   catch { return null; }
 }
 
@@ -935,7 +973,7 @@ async function readSettings() {
   for (const [id, name, color, kind, hidden] of r.values ?? []) {
     if (!name?.trim()) continue;
     cats.push({
-      id: id?.trim() || 'c' + Date.now().toString(36) + cats.length,
+      id: safeId(id?.trim()) ? id.trim() : 'c' + Date.now().toString(36) + cats.length,
       name: name.trim().slice(0, 30),
       color: /^#[0-9a-f]{6}$/i.test(color?.trim() ?? '') ? color.trim()
         : PALETTE.find(p => !cats.some(c => c.color === p)) ?? PALETTE[cats.length % PALETTE.length],
