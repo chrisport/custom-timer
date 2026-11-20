@@ -446,6 +446,26 @@ function dayTotals(day0) {
   return t;
 }
 const totals = () => dayTotals(startOfDay(Date.now()));
+function weekWorkTotal(ts = Date.now()) {
+  const monday = new Date(ts);
+  monday.setHours(0, 0, 0, 0);
+  monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7));
+  const from = monday.getTime(), until = Math.min(Date.now(), nextDay(from));
+  const workCats = new Set(state.cats.filter(c => c.kind === 'work').map(c => c.id));
+  let total = 0;
+  for (const e of state.entries) {
+    if (!workCats.has(e.cat)) continue;
+    if (isAdj(e)) {
+      if (e.at >= from && e.at < until) total += e.adj;
+    } else {
+      total += Math.max(0, Math.min(e.end ?? Date.now(), until) - Math.max(e.start, from));
+    }
+  }
+  if (state.active && workCats.has(state.active.cat)) {
+    total += Math.max(0, until - Math.max(state.active.start, from));
+  }
+  return total;
+}
 
 // ---- editing timed entries ----
 // Neighbours that touch the entry (end === start) move along with it.
@@ -562,7 +582,7 @@ function tick() {
     b.querySelector('.time').textContent = fmtDur(t[id] ?? 0);
     b.querySelector('.state').textContent = active ? `läuft seit ${fmtClock(state.active.start)}` : '';
   }
-  $('total').textContent = `Heute: Arbeit ${fmtDur(sumKind(t, 'work'), false)} · Pause ${fmtDur(sumKind(t, 'break'), false)}`;
+  $('total').textContent = `Arbeit heute ${fmtDur(sumKind(t, 'work'), false)} · Woche ${fmtDur(weekWorkTotal(), false)}`;
   $('stop').disabled = !state.active;
   const run = logEl.querySelector('[data-idx="active"] .dur');
   if (run) run.textContent = fmtDur(Date.now() - state.active.start);
