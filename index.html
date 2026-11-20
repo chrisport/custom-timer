@@ -450,7 +450,10 @@ function weekWorkTotal(ts = Date.now()) {
   const monday = new Date(ts);
   monday.setHours(0, 0, 0, 0);
   monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7));
-  const from = monday.getTime(), until = Math.min(Date.now(), nextDay(from));
+  const from = monday.getTime();
+  const weekEnd = new Date(from);
+  weekEnd.setDate(weekEnd.getDate() + 7); // next Monday 00:00, exclusive
+  const until = Math.min(Date.now(), weekEnd.getTime());
   const workCats = new Set(state.cats.filter(c => c.kind === 'work').map(c => c.id));
   let total = 0;
   for (const e of state.entries) {
